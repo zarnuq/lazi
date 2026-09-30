@@ -202,10 +202,6 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: Action) -> io::Resul
         Action::Find(backward) => app.start_find(backward),
         Action::FindNext(backward) => app.find_next(backward),
         Action::Filter => app.start_filter(),
-        Action::Run(script) => {
-            let cmd = Cmd { desc: script, script, args: &[], block: true };
-            run_cmd(term, app, &cmd)?;
-        }
         Action::Jump(script) => {
             app.kitty.clear(term.backend_mut())?;
             if let Some(out) = open::capture(term, script, &app.cwd)? {

@@ -90,8 +90,6 @@ pub enum Action {
     FindNext(bool),
     /// Narrow the listing to names matching as you type.
     Filter,
-    /// Run a fixed command with the terminal handed over.
-    Run(&'static str),
     /// Run a picker (fzf) and go to what it prints.
     Jump(&'static str),
     CopyPath(Part),
@@ -240,7 +238,6 @@ pub const KEYMAP: &[(&[Key], Action)] = &[
     (&[key('n')], Action::FindNext(false)),
     (&[key('N')], Action::FindNext(true)),
     (&[key('f')], Action::Filter),
-    (&[key('!')], Action::Run("pwsh")),
     (&[key('z')], Action::Jump("fzf")),
     (&[key('c'), key('c')], Action::CopyPath(Part::Path)),
     (&[key('c'), key('d')], Action::CopyPath(Part::Dir)),
