@@ -93,12 +93,6 @@ pub enum Mark {
     Cut,
 }
 
-/// Visual mode: everything between the anchor and the cursor is (un)selected.
-struct Visual {
-    anchor: usize,
-    unset: bool,
-}
-
 pub struct App {
     pub cwd: PathBuf,
     pub cursor: usize,
@@ -116,7 +110,6 @@ pub struct App {
     pub selected: BTreeSet<PathBuf>,
     pub yank: Option<Yank>,
     pub tasks: BTreeMap<u64, Progress>,
-    visual: Option<Visual>,
     next_task: u64,
     show_hidden: bool,
     cache: HashMap<PathBuf, Listing>,
@@ -158,7 +151,6 @@ impl App {
             selected: BTreeSet::new(),
             yank: None,
             tasks: BTreeMap::new(),
-            visual: None,
             next_task: 0,
             show_hidden: SHOW_HIDDEN,
             cache: HashMap::new(),
@@ -263,10 +255,6 @@ impl App {
         self.kitty.sync(out, image.map(|img| (img, area.x + 1, area.y)))
     }
 
-    pub fn in_visual(&self) -> bool {
-        self.visual.is_some()
-    }
-
     /// What `wake::wait` should watch on the app's behalf.
     pub fn wake_fds(&self) -> Vec<RawFd> {
         let mut fds = vec![self.notify.waker.fd()];
@@ -291,14 +279,8 @@ impl App {
         true
     }
 
-    /// How `entry` (at `index` in `dir`) should be marked: selection wins over the yank register.
-    pub fn mark(&self, dir: &Path, index: usize, entry: &Entry) -> Option<Mark> {
-        if let Some(visual) = &self.visual
-            && dir == self.cwd
-            && (visual.anchor.min(self.cursor)..=visual.anchor.max(self.cursor)).contains(&index)
-        {
-            return (!visual.unset).then_some(Mark::Selected);
-        }
+    /// How `entry` in `dir` should be marked: selection wins over the yank register.
+    pub fn mark(&self, dir: &Path, entry: &Entry) -> Option<Mark> {
         if self.selected.is_empty() && self.yank.is_none() {
             return None;
         }
@@ -358,7 +340,6 @@ impl App {
 
     pub fn back(&mut self) {
         if let Some(dir) = self.back.pop() {
-            self.commit_visual();
             let old = mem::replace(&mut self.cwd, dir);
             self.forward.push(old);
             self.after_cd();
@@ -367,7 +348,6 @@ impl App {
 
     pub fn forward(&mut self) {
         if let Some(dir) = self.forward.pop() {
-            self.commit_visual();
             let old = mem::replace(&mut self.cwd, dir);
             self.back.push(old);
             self.after_cd();
@@ -410,19 +390,9 @@ impl App {
         }
     }
 
-    pub fn visual(&mut self, unset: bool) {
-        self.commit_visual();
-        if !self.entries().is_empty() {
-            self.visual = Some(Visual { anchor: self.cursor, unset });
-        }
-    }
-
-    /// Undoes one thing, in order: visual mode (keeping its selection), the selection, the
-    /// filter, the find highlight.
+    /// Undoes one thing, in order: the selection, the filter, the find highlight.
     pub fn escape(&mut self) {
-        if self.visual.is_some() {
-            self.commit_visual();
-        } else if !self.selected.is_empty() {
+        if !self.selected.is_empty() {
             self.selected.clear();
         } else if self.filter.is_some() {
             self.set_filter("");
@@ -431,9 +401,8 @@ impl App {
         }
     }
 
-    /// The selection, including any visual range, or else the hovered entry.
-    pub fn targets(&mut self) -> Vec<PathBuf> {
-        self.commit_visual();
+    /// The selection, or else the hovered entry.
+    pub fn targets(&self) -> Vec<PathBuf> {
         if self.selected.is_empty() {
             self.hovered().map(|(path, _)| path).into_iter().collect()
         } else {
@@ -762,25 +731,10 @@ impl App {
         });
     }
 
-    fn commit_visual(&mut self) {
-        let Some(visual) = self.visual.take() else { return };
-        let (lo, hi) = (visual.anchor.min(self.cursor), visual.anchor.max(self.cursor));
-        let paths: Vec<PathBuf> =
-            self.entries().iter().skip(lo).take(hi - lo + 1).map(|e| self.cwd.join(&e.name)).collect();
-        for path in paths {
-            if visual.unset {
-                self.selected.remove(&path);
-            } else {
-                self.selected.insert(path);
-            }
-        }
-    }
-
     fn cd(&mut self, dir: PathBuf) {
         if dir == self.cwd {
             return;
         }
-        self.commit_visual();
         let old = mem::replace(&mut self.cwd, dir);
         self.back.push(old);
         self.forward.clear();

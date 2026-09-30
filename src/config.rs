@@ -70,9 +70,7 @@ pub enum Action {
     ToggleSelect,
     SelectAll,
     InvertSelection,
-    /// Visual mode; `true` unselects the range instead.
-    Visual(bool),
-    /// Leave visual mode, or clear the selection.
+    /// Clear the selection, else the filter, else the find highlight.
     Escape,
     /// Yank the targets; `true` cuts.
     Yank(bool),
@@ -220,8 +218,6 @@ pub const KEYMAP: &[(&[Key], Action)] = &[
     (&[key(' ')], Action::ToggleSelect),
     (&[ctrl('a')], Action::SelectAll),
     (&[ctrl('r')], Action::InvertSelection),
-    (&[key('v')], Action::Visual(false)),
-    (&[key('V')], Action::Visual(true)),
     (&[code(Esc)], Action::Escape),
     (&[key('y')], Action::Yank(false)),
     (&[key('x')], Action::Yank(true)),

@@ -191,7 +191,6 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: Action) -> io::Resul
         Action::ToggleSelect => app.toggle_select(),
         Action::SelectAll => app.select_all(false),
         Action::InvertSelection => app.select_all(true),
-        Action::Visual(unset) => app.visual(unset),
         Action::Escape => app.escape(),
         Action::Yank(cut) => app.yank(cut),
         Action::Unyank => app.unyank(),

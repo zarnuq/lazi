@@ -103,9 +103,6 @@ fn draw_status(buf: &mut Buffer, area: Rect, app: &App) -> Option<(u16, u16)> {
     if let Some(find) = &app.find {
         right.push_str(&format!("find: {find}  "));
     }
-    if app.in_visual() {
-        right.push_str("VISUAL  ");
-    }
     if !app.selected.is_empty() {
         right.push_str(&format!("{} selected  ", app.selected.len()));
     }
@@ -236,7 +233,7 @@ fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, fi
             style = style.patch(CURSOR);
         }
         buf.set_stringn(area.x + 1, y, entry.name.to_string_lossy(), width, style);
-        if let Some(mark) = app.mark(dir, i, entry)
+        if let Some(mark) = app.mark(dir, entry)
             && let Some(cell) = buf.cell_mut((area.x, y))
         {
             // Reset first so the cursor's reverse video doesn't swap the colour away.
