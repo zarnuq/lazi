@@ -86,8 +86,6 @@ pub enum Action {
     FindNext(bool),
     /// Narrow the listing to names matching as you type.
     Filter,
-    /// Prompt for a shell command; `true` hands it the terminal and waits.
-    Shell(bool),
     /// Run a fixed command with the terminal handed over.
     Run(&'static str),
     /// Prompt for a directory to go to.
@@ -213,8 +211,6 @@ pub const KEYMAP: &[(&[Key], Action)] = &[
     (&[key('n')], Action::FindNext(false)),
     (&[key('N')], Action::FindNext(true)),
     (&[key('f')], Action::Filter),
-    (&[key(';')], Action::Shell(false)),
-    (&[key(':')], Action::Shell(true)),
     (&[key('!')], Action::Run("pwsh")),
     (&[key('s')], Action::Cd),
     (&[key('z')], Action::Jump("fzf")),

@@ -98,7 +98,7 @@ fn run(term: &mut DefaultTerminal, app: &mut App, bench: Option<Instant>) -> io:
                     dirty = true;
                     let key = normalize(key);
                     if app.prompt.is_some() {
-                        prompt_key(term, app, key)?;
+                        prompt_key(app, key);
                         continue;
                     }
                     if app.menu.is_some() {
@@ -168,10 +168,9 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: Action) -> io::Resul
         Action::Find(backward) => app.start_find(backward),
         Action::FindNext(backward) => app.find_next(backward),
         Action::Filter => app.start_filter(),
-        Action::Shell(block) => app.start_shell(block),
         Action::Cd => app.start_cd(),
         Action::Run(script) => {
-            let cmd = Cmd { desc: script, script, arg0: OsStr::new("sh"), args: &[], block: true, pause: false };
+            let cmd = Cmd { desc: script, script, args: &[], block: true };
             run_cmd(term, app, &cmd)?;
         }
         Action::Jump(script) => {
@@ -222,17 +221,10 @@ fn menu_key(term: &mut DefaultTerminal, app: &mut App, key: Key) -> io::Result<(
 }
 
 /// Keys while a prompt is open: y/n for a confirmation, text editing for the rest.
-fn prompt_key(term: &mut DefaultTerminal, app: &mut App, key: Key) -> io::Result<()> {
+fn prompt_key(app: &mut App, key: Key) {
     match (&mut app.prompt, key.0) {
         (Some(Prompt::Confirm { .. }), KeyCode::Char('y' | 'Y')) => app.submit(),
         (Some(Prompt::Confirm { .. }), _) | (_, KeyCode::Esc) => app.cancel_prompt(),
-        (Some(Prompt::Shell { .. }), KeyCode::Enter) => {
-            if let Some(Prompt::Shell { input, block }) = app.prompt.take()
-                && !input.text.is_empty()
-            {
-                run_shell(term, app, &input.text, block)?;
-            }
-        }
         (_, KeyCode::Enter) => app.submit(),
         (Some(prompt), _) => {
             if prompt.input_mut().is_some_and(|input| input.key(key)) {
@@ -241,19 +233,10 @@ fn prompt_key(term: &mut DefaultTerminal, app: &mut App, key: Key) -> io::Result
         }
         (None, _) => {}
     }
-    Ok(())
-}
-
-/// Runs a typed command with `$0` as the hovered file and `$@` as the targets, like yazi.
-fn run_shell(term: &mut DefaultTerminal, app: &mut App, script: &str, block: bool) -> io::Result<()> {
-    let hovered = app.hovered().map_or_else(|| "sh".into(), |(path, _)| path.into_os_string());
-    let targets = app.targets();
-    let cmd = Cmd { desc: "shell", script, arg0: &hovered, args: &targets, block, pause: block };
-    run_cmd(term, app, &cmd)
 }
 
 fn run_opener(term: &mut DefaultTerminal, app: &mut App, opener: &Opener, files: &[PathBuf]) -> io::Result<()> {
-    let cmd = Cmd { desc: opener.desc, script: opener.run, arg0: OsStr::new("sh"), args: files, block: opener.block, pause: false };
+    let cmd = Cmd { desc: opener.desc, script: opener.run, args: files, block: opener.block };
     run_cmd(term, app, &cmd)
 }
 

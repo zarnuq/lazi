@@ -40,7 +40,6 @@ pub enum Prompt {
     /// Incremental find; `origin` is where the cursor goes back to if cancelled.
     Find { input: Input, backward: bool, origin: usize },
     Filter(Input),
-    Shell { input: Input, block: bool },
     Cd(Input),
 }
 
@@ -51,7 +50,6 @@ impl Prompt {
             | Prompt::Rename { input, .. }
             | Prompt::Find { input, .. }
             | Prompt::Filter(input)
-            | Prompt::Shell { input, .. }
             | Prompt::Cd(input) => Some(input),
             Prompt::Confirm { .. } => None,
         }
@@ -420,9 +418,7 @@ impl App {
             }
             Some(Prompt::Cd(input)) => self.goto(&input.text),
             // Find and filter already happened as the text was typed; they just stay.
-            Some(Prompt::Find { .. } | Prompt::Filter(_)) => {}
-            // Shell commands need the terminal, so main runs them.
-            Some(Prompt::Shell { .. }) | None => {}
+            Some(Prompt::Find { .. } | Prompt::Filter(_)) | None => {}
         }
     }
 
@@ -502,10 +498,6 @@ impl App {
         let matcher = Matcher::new(&filter.query);
         let all = self.cache.get(&self.cwd).map_or(&[][..], |l| &l.entries);
         filter.entries = all.iter().filter(|e| matcher.matches(e)).cloned().collect();
-    }
-
-    pub fn start_shell(&mut self, block: bool) {
-        self.prompt = Some(Prompt::Shell { input: Input::new(String::new(), 0), block });
     }
 
     pub fn start_cd(&mut self) {

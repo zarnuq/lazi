@@ -1,8 +1,7 @@
 //! Choosing and running external programs.
 
-use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{self, BufRead, Read, Seek, Write};
+use std::io::{self, Read, Seek, Write};
 use std::os::fd::FromRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -63,14 +62,10 @@ pub struct Cmd<'a> {
     /// Names the command in error messages.
     pub desc: &'a str,
     pub script: &'a str,
-    /// `$0` for the script.
-    pub arg0: &'a OsStr,
     /// `$@` for the script.
     pub args: &'a [PathBuf],
     /// Hand the terminal over and wait, instead of detaching.
     pub block: bool,
-    /// After a blocking command, wait for Enter so its output can be read.
-    pub pause: bool,
 }
 
 /// Runs `cmd` from `cwd`. A blocking command's failure is returned for the status line; a
@@ -82,17 +77,12 @@ pub fn run(
     on_fail: Box<dyn FnOnce(String) + Send>,
 ) -> io::Result<Option<String>> {
     let mut command = Command::new("sh");
-    command.arg("-c").arg(cmd.script).arg(cmd.arg0).args(cmd.args).current_dir(cwd);
+    // Same calling convention as yazi: the files are "$@" to the snippet.
+    command.arg("-c").arg(cmd.script).arg("sh").args(cmd.args).current_dir(cwd);
 
     if cmd.block {
         suspend(term)?;
         let status = command.status();
-        if cmd.pause {
-            let what = status.as_ref().map_or_else(|e| e.to_string(), |s| s.to_string());
-            print!("\n[{what}] press Enter to continue");
-            io::stdout().flush()?;
-            io::stdin().lock().read_line(&mut String::new())?;
-        }
         resume(term)?;
         return Ok(match status {
             Ok(s) if s.success() => None,
