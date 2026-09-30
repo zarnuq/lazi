@@ -128,13 +128,14 @@ struct Highlighter {
     theme: Theme,
 }
 
-/// syntect's bundled grammars and themes, loaded on first use.
+/// bat's grammars (syntect's defaults plus TOML, Nix, Zig, Dockerfile and many more) and
+/// syntect's themes, loaded on first use.
 fn highlighter() -> &'static Highlighter {
     static HIGHLIGHTER: OnceLock<Highlighter> = OnceLock::new();
     HIGHLIGHTER.get_or_init(|| {
         let mut themes = ThemeSet::load_defaults().themes;
         let theme = themes.remove(SYNTAX_THEME).expect("SYNTAX_THEME names one of syntect's bundled themes");
-        Highlighter { syntaxes: SyntaxSet::load_defaults_newlines(), theme }
+        Highlighter { syntaxes: two_face::syntax::extra_newlines(), theme }
     })
 }
 
