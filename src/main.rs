@@ -256,6 +256,7 @@ fn prompt_key(app: &mut App, key: Key) {
     match (&mut app.prompt, key.0) {
         (Some(Prompt::Confirm { .. }), KeyCode::Char('y' | 'Y')) => app.submit(),
         (Some(Prompt::Confirm { .. }), _) | (_, KeyCode::Esc) => app.cancel_prompt(),
+        (Some(Prompt::Find { .. }), KeyCode::Tab) => app.find_complete(),
         (_, KeyCode::Enter) => app.submit(),
         (Some(prompt), _) => {
             if prompt.input_mut().is_some_and(|input| input.key(key)) {

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::time::SystemTime;
 use std::{fs, io, path::Path};
@@ -59,11 +60,29 @@ impl Matcher {
     }
 
     pub fn matches(&self, entry: &Entry) -> bool {
-        if self.sensitive {
-            entry.name.to_string_lossy().contains(&self.query)
-        } else {
-            entry.key.contains(&self.query)
+        self.subject(entry).contains(&self.query)
+    }
+
+    pub fn is_prefix(&self, entry: &Entry) -> bool {
+        self.subject(entry).starts_with(&self.query)
+    }
+
+    /// The longest start the entries' names share (as compared, so lowercased unless the query
+    /// is case-sensitive): what Tab can extend the query to.
+    pub fn common_prefix(&self, entries: &[&Entry]) -> String {
+        let Some((first, rest)) = entries.split_first() else { return self.query.clone() };
+        let first = self.subject(first);
+        let mut len = first.len();
+        for entry in rest {
+            let subject = self.subject(entry);
+            len = first.char_indices().zip(subject.chars()).find(|((_, a), b)| a != b).map_or(len.min(subject.len()), |((i, _), _)| i.min(len));
         }
+        first[..len].to_owned()
+    }
+
+    /// The name as this matcher sees it.
+    fn subject<'a>(&self, entry: &'a Entry) -> Cow<'a, str> {
+        if self.sensitive { entry.name.to_string_lossy() } else { Cow::Borrowed(&entry.key) }
     }
 }
 

@@ -16,6 +16,12 @@ impl Input {
         Self { text, cursor }
     }
 
+    /// Replaces the text, with the cursor at the end.
+    pub fn set(&mut self, text: String) {
+        self.cursor = text.len();
+        self.text = text;
+    }
+
     /// Display width of the text before the cursor, for placing the terminal cursor.
     pub fn cursor_width(&self) -> usize {
         Span::raw(&self.text[..self.cursor]).width()

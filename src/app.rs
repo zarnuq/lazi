@@ -519,6 +519,52 @@ impl App {
         }
     }
 
+    /// Tab in the find prompt, like shell completion: extends the query as far as the matches
+    /// agree, enters a directory once it's the only match (or once there's nothing left to
+    /// extend and the find is on one), and completes a lone file's name. Entering a directory
+    /// leaves the prompt open, empty, for the next level down.
+    pub fn find_complete(&mut self) {
+        let Some(Prompt::Find { input, backward, .. }) = &self.prompt else { return };
+        let (query, backward) = (input.text.clone(), *backward);
+        let matcher = Matcher::new(&query);
+        let entries = self.entries();
+        // Names starting with the query come first; failing that, any containing it.
+        let prefixed: Vec<&Entry> = entries.iter().filter(|e| matcher.is_prefix(e)).collect();
+        let matches: Vec<&Entry> =
+            if prefixed.is_empty() { entries.iter().filter(|e| matcher.matches(e)).collect() } else { prefixed.clone() };
+        let hovered = entries.get(self.cursor).filter(|e| e.is_dir && matcher.matches(e));
+
+        let enter = match matches.as_slice() {
+            [] => return,
+            [only] if only.is_dir => only,
+            [only] => {
+                let name = only.name.to_string_lossy().into_owned();
+                self.set_find_query(name);
+                return;
+            }
+            _ => {
+                let common = matcher.common_prefix(&prefixed);
+                if common.chars().count() > query.chars().count() {
+                    self.set_find_query(common);
+                    return;
+                }
+                let Some(dir) = hovered else { return };
+                dir
+            }
+        };
+        let dir = self.cwd.join(&enter.name);
+        self.cd(dir);
+        let input = Input::new(String::new(), 0);
+        self.prompt = Some(Prompt::Find { input, backward, origin: self.cursor });
+    }
+
+    fn set_find_query(&mut self, query: String) {
+        if let Some(Prompt::Find { input, .. }) = &mut self.prompt {
+            input.set(query);
+            self.prompt_changed();
+        }
+    }
+
     pub fn start_find(&mut self, backward: bool) {
         let input = Input::new(String::new(), 0);
         self.prompt = Some(Prompt::Find { input, backward, origin: self.cursor });
