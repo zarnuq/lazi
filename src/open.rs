@@ -20,7 +20,8 @@ pub enum Kind {
     Dir,
     Image,
     Pdf,
-    Media,
+    Video,
+    Audio,
     Archive,
     Text,
     Other,
@@ -35,10 +36,8 @@ pub fn kind(path: &Path, is_dir: bool) -> Kind {
     match ext.as_deref() {
         Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "svg" | "avif" | "heic" | "ico" | "jxl") => Kind::Image,
         Some("pdf" | "epub" | "djvu") => Kind::Pdf,
-        Some(
-            "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" | "flv" | "wmv" | "mp3" | "flac" | "ogg" | "opus" | "wav" | "m4a"
-            | "aac" | "wma",
-        ) => Kind::Media,
+        Some("mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" | "flv" | "wmv") => Kind::Video,
+        Some("mp3" | "flac" | "ogg" | "opus" | "wav" | "m4a" | "aac" | "wma") => Kind::Audio,
         Some("zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "txz" | "zst" | "7z" | "rar" | "iso" | "cpio" | "lz4") => {
             Kind::Archive
         }

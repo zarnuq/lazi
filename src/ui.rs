@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use ratatui::widgets::{Block, Clear, Widget};
+use ratatui::widgets::{Block, Clear, Paragraph, Widget, Wrap};
 
 use crate::app::{App, Mark, Menu, Prompt};
 use crate::config::{
@@ -13,6 +13,7 @@ use crate::config::{
 };
 use crate::fs::{Entry, Listing, Matcher};
 use crate::input::Input;
+use crate::preview::Preview;
 
 /// Row 0 is the cwd, the last row is the status line, and the three columns fill the middle.
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -26,6 +27,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let body = Rect { y: area.y + 1, height: area.height - 2, ..area };
     let [parent_col, cwd_col, preview_col] = columns(body);
     app.height = body.height as usize;
+    app.preview_area = preview_col;
     app.scroll();
     let app = &*app;
 
@@ -44,6 +46,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     {
         let cursor = app.hovered_in(&dir).and_then(|name| listing.position(name)).unwrap_or(0);
         draw_side(buf, preview_col, app, &dir, listing, Some(cursor));
+    } else if let Some(preview) = app.current_preview() {
+        draw_preview(buf, preview_col, app, preview);
     }
 
     let status = Rect { y: area.bottom() - 1, height: 1, ..area };
@@ -53,6 +57,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if let Some(pos) = cursor {
         frame.set_cursor_position(pos);
+    }
+}
+
+/// A file's preview. Images only leave the area blank here; kitty draws them after the frame.
+fn draw_preview(buf: &mut Buffer, area: Rect, app: &App, preview: &Preview) {
+    let inner = Rect { x: area.x + 1, width: area.width.saturating_sub(2), ..area };
+    match preview {
+        Preview::Text(lines) => {
+            // Each line wraps to at least one row, so this many lines always fill the area.
+            let visible: Vec<_> = lines.iter().skip(app.preview_scroll).take(inner.height as usize).cloned().collect();
+            Paragraph::new(visible).wrap(Wrap { trim: false }).render(inner, buf);
+        }
+        Preview::Image(_) => {}
+        Preview::Note(note) => {
+            buf.set_stringn(inner.x, inner.y, note, inner.width as usize, DIM);
+        }
     }
 }
 

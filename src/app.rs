@@ -3,7 +3,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Component, Path, PathBuf};
-use std::io;
+use std::io::{self, Write};
 use std::os::fd::RawFd;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -14,8 +14,10 @@ use crate::config::{
 };
 use crate::fs::{Entry, Listing, Matcher};
 use crate::input::Input;
+use crate::kitty::{self, Kitty};
 use crate::open;
 use crate::ops::{Op, Progress};
+use crate::preview::{self, Preview, Request};
 use crate::wake::Waker;
 use crate::watch::Watcher;
 
@@ -27,6 +29,7 @@ pub enum Msg {
     Done(u64, Vec<String>),
     /// A detached program failed.
     Failed(String),
+    Preview(Request, Preview),
 }
 
 /// Sends to the main loop and wakes it, since it may be asleep in `wake::wait`.
@@ -127,12 +130,22 @@ pub struct App {
     notify: Notifier,
     rx: Receiver<Msg>,
     watcher: Option<Watcher>,
+    /// Where the preview column was last drawn; ui updates it every frame.
+    pub preview_area: ratatui::layout::Rect,
+    pub preview_scroll: usize,
+    pub kitty: Kitty,
+    /// The latest preview, and the one being built, if any.
+    preview: Option<(Request, Preview)>,
+    preview_wanted: Option<Request>,
+    previewer: preview::Worker,
 }
 
 impl App {
     pub fn new(cwd: PathBuf) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         let notify = Notifier { tx, waker: Waker::new()? };
+        let to_main = notify.clone();
+        let previewer = preview::Worker::new(move |req, preview| to_main.send(Msg::Preview(req, preview)));
         let mut app = Self {
             cwd,
             cursor: 0,
@@ -158,6 +171,12 @@ impl App {
             notify,
             rx,
             watcher: Watcher::new(),
+            preview_area: ratatui::layout::Rect::default(),
+            preview_scroll: 0,
+            kitty: Kitty::default(),
+            preview: None,
+            preview_wanted: None,
+            previewer,
         };
         // The cwd is read inline: there is nothing to draw without it anyway.
         let listing = Listing::read(&app.cwd, app.show_hidden);
@@ -196,7 +215,54 @@ impl App {
     }
 
     pub fn is_loading(&self) -> bool {
-        !self.loading.is_empty()
+        !self.loading.is_empty() || self.preview_wanted.is_some()
+    }
+
+    /// The preview for the hovered file, once it's ready.
+    pub fn current_preview(&self) -> Option<&Preview> {
+        let (req, preview) = self.preview.as_ref()?;
+        let (path, is_dir) = self.hovered()?;
+        (!is_dir && req.path == path).then_some(preview)
+    }
+
+    /// Asks for a preview of the hovered file if the latest one doesn't cover it (a different
+    /// file, an edit since, or a resized area).
+    pub fn request_preview(&mut self) {
+        let Some((path, is_dir)) = self.hovered() else { return };
+        let area = self.preview_area;
+        if is_dir || area.width < 3 || area.height == 0 {
+            return;
+        }
+        let (cell_w, cell_h) = kitty::cell_size();
+        let cols = area.width - 2;
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let px = (cols as u32 * cell_w, area.height as u32 * cell_h);
+        let req = Request { path, mtime, cols, rows: area.height, px };
+        if self.preview.as_ref().is_some_and(|(r, _)| *r == req) || self.preview_wanted.as_ref() == Some(&req) {
+            return;
+        }
+        self.preview_wanted = Some(req.clone());
+        self.previewer.request(req);
+    }
+
+    /// Scrolls a text preview.
+    pub fn seek(&mut self, delta: isize) {
+        if let Some(Preview::Text(lines)) = self.current_preview() {
+            let last = lines.len().saturating_sub(1);
+            self.preview_scroll = self.preview_scroll.saturating_add_signed(delta).min(last);
+        }
+    }
+
+    /// Shows or hides the image preview to match what's on screen. Called after each frame.
+    pub fn sync_image(&mut self, out: &mut impl Write) -> io::Result<()> {
+        // Not while the popup is up, which would otherwise sit under the image.
+        let show = self.menu.is_none() && matches!(self.current_preview(), Some(Preview::Image(_)));
+        let image = match &self.preview {
+            Some((_, Preview::Image(img))) if show => Some(img),
+            _ => None,
+        };
+        let area = self.preview_area;
+        self.kitty.sync(out, image.map(|img| (img, area.x + 1, area.y)))
     }
 
     pub fn in_visual(&self) -> bool {
@@ -622,6 +688,16 @@ impl App {
                     self.refresh();
                 }
                 Msg::Failed(msg) => self.error = Some(msg),
+                Msg::Preview(req, preview) => {
+                    // Anything else is for a file already scrolled past.
+                    if self.preview_wanted.as_ref() == Some(&req) {
+                        if self.preview.as_ref().is_none_or(|(old, _)| old.path != req.path) {
+                            self.preview_scroll = 0;
+                        }
+                        self.preview = Some((req, preview));
+                        self.preview_wanted = None;
+                    }
+                }
             }
         }
         got
@@ -757,6 +833,7 @@ impl App {
         if let Some(watcher) = &mut self.watcher {
             watcher.set(&visible);
         }
+        self.request_preview();
         if self.cache.len() > CACHE_MAX {
             self.cache.retain(|dir, _| visible.contains(dir));
         }

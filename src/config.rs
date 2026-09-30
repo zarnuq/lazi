@@ -9,6 +9,12 @@ use ratatui::style::{Color, Modifier, Style};
 use crate::open::Kind;
 
 pub const SHOW_HIDDEN: bool = true;
+/// Columns per tab stop in text previews.
+pub const TAB_SIZE: usize = 5;
+/// Largest image size (pixels) sent to the terminal, whatever the preview area.
+pub const IMAGE_MAX: (u32, u32) = (2500, 1500);
+/// Preview commands running longer than this are killed.
+pub const PREVIEW_TIMEOUT: Duration = Duration::from_secs(3);
 /// Reads text for `cc` and friends on stdin.
 pub const CLIPBOARD: &[&str] = &["wl-copy"];
 pub const SCROLLOFF: usize = 5;
@@ -88,6 +94,33 @@ pub enum Action {
     Jump(&'static str),
     CopyPath(Part),
     Suspend,
+    /// Scroll the file preview by this many lines.
+    Seek(isize),
+}
+
+/// How a file is previewed. Scripts get the file as "$1" and the area as $COLUMNS/$LINES.
+pub enum Previewer {
+    /// The file's own text.
+    Text,
+    /// Decoded and shown with kitty's graphics protocol.
+    Image,
+    /// A script printing an image (e.g. PNG) to stdout.
+    ImageCmd(&'static str),
+    /// A script whose output is shown as text; ANSI colours are kept.
+    Cmd(&'static str),
+}
+
+pub fn previewer(kind: Kind) -> Previewer {
+    match kind {
+        Kind::Text => Previewer::Text,
+        Kind::Image => Previewer::Image,
+        // A representative frame from the first couple of seconds, rather than a black first one.
+        Kind::Video => Previewer::ImageCmd(r#"ffmpeg -v error -i "$1" -vf thumbnail=50 -frames:v 1 -f image2pipe -c:v png -"#),
+        // Metadata only, without exiftool's own and the filesystem's.
+        Kind::Audio | Kind::Pdf => Previewer::Cmd(r#"exiftool -S --File:all --ExifTool:all "$1""#),
+        Kind::Archive => Previewer::Cmd(r#"bsdtar -tf "$1""#),
+        Kind::Dir | Kind::Other => Previewer::Cmd(r#"file -b "$1""#),
+    }
 }
 
 /// Which part of the targets' paths to copy.
@@ -131,7 +164,7 @@ pub fn openers(kind: Kind) -> &'static [Opener] {
         Kind::Dir => &[SHELL, EDIT, REVEAL],
         Kind::Image => &[VIEW, SETBG, OPEN, REVEAL],
         Kind::Pdf => &[READ, OPEN, REVEAL],
-        Kind::Media => &[PLAY, MEDIAINFO, REVEAL],
+        Kind::Video | Kind::Audio => &[PLAY, MEDIAINFO, REVEAL],
         Kind::Archive => &[EXTRACT, OPEN, REVEAL],
         Kind::Text => &[EDIT, REVEAL],
         Kind::Other => &[OPEN, REVEAL],
@@ -214,6 +247,8 @@ pub const KEYMAP: &[(&[Key], Action)] = &[
     (&[key('c'), key('f')], Action::CopyPath(Part::Name)),
     (&[key('c'), key('n')], Action::CopyPath(Part::Stem)),
     (&[ctrl('z')], Action::Suspend),
+    (&[key('K')], Action::Seek(-5)),
+    (&[key('J')], Action::Seek(5)),
 ];
 
 pub enum Lookup {

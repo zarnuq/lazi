@@ -2,8 +2,10 @@ mod app;
 mod config;
 mod fs;
 mod input;
+mod kitty;
 mod open;
 mod ops;
+mod preview;
 mod ui;
 mod wake;
 mod watch;
@@ -58,6 +60,7 @@ fn main() -> io::Result<()> {
     let mut app = App::new(cwd)?;
     let mut term = ratatui::init();
     let res = run(&mut term, &mut app, bench.then_some(start));
+    let _ = app.kitty.clear(term.backend_mut());
     ratatui::restore();
 
     match res? {
@@ -100,6 +103,8 @@ fn run(term: &mut DefaultTerminal, app: &mut App, bench: Option<Instant>) -> io:
             // Every frame, since programs lazi hands the terminal to may have changed it.
             queue!(term.backend_mut(), SetTitle(format!("lazi: {}", ui::header(&app.cwd))))?;
             draw(term, app)?;
+            // The first frame, or a resize, may have changed the preview area.
+            app.request_preview();
             dirty = false;
             if let Some(start) = bench {
                 return Ok(Exit::Bench(start.elapsed()));
@@ -203,12 +208,15 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: Action) -> io::Resul
             run_cmd(term, app, &cmd)?;
         }
         Action::Jump(script) => {
+            app.kitty.clear(term.backend_mut())?;
             if let Some(out) = open::capture(term, script, &app.cwd)? {
                 app.reveal(Path::new(&out));
             }
         }
         Action::CopyPath(part) => app.copy_path(part),
+        Action::Seek(delta) => app.seek(delta),
         Action::Suspend => {
+            app.kitty.clear(term.backend_mut())?;
             open::suspend(term)?;
             // Raw mode turned off the terminal's own ^Z handling, so stop ourselves; the shell's
             // `fg` resumes here.
@@ -270,6 +278,9 @@ fn run_opener(term: &mut DefaultTerminal, app: &mut App, opener: &Opener, files:
 }
 
 fn run_cmd(term: &mut DefaultTerminal, app: &mut App, cmd: &Cmd) -> io::Result<()> {
+    if cmd.block {
+        app.kitty.clear(term.backend_mut())?;
+    }
     let on_fail = app.on_fail();
     app.error = open::run(term, cmd, &app.cwd, on_fail)?;
     // A blocking program (an editor, a shell) may have changed what's on disk.
@@ -290,5 +301,6 @@ fn normalize(key: KeyEvent) -> Key {
 fn draw(term: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     queue!(term.backend_mut(), BeginSynchronizedUpdate)?;
     term.draw(|frame| ui::draw(frame, app))?;
+    app.sync_image(term.backend_mut())?;
     execute!(term.backend_mut(), EndSynchronizedUpdate)
 }

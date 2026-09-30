@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 libc = "0.2.189"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 signal-hook = "0.3"
@@ -11,5 +12,4 @@ signal-hook = "0.3"
 [profile.release]
 lto = "fat"
 codegen-units = 1
-panic = "abort"
 strip = true
