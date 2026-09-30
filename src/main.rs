@@ -202,7 +202,6 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: Action) -> io::Resul
         Action::Find(backward) => app.start_find(backward),
         Action::FindNext(backward) => app.find_next(backward),
         Action::Filter => app.start_filter(),
-        Action::Cd => app.start_cd(),
         Action::Run(script) => {
             let cmd = Cmd { desc: script, script, args: &[], block: true };
             run_cmd(term, app, &cmd)?;

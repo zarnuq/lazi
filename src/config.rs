@@ -92,9 +92,7 @@ pub enum Action {
     Filter,
     /// Run a fixed command with the terminal handed over.
     Run(&'static str),
-    /// Prompt for a directory to go to.
-    Cd,
-    /// Run a picker (fzf, zoxide) and go to what it prints.
+    /// Run a picker (fzf) and go to what it prints.
     Jump(&'static str),
     CopyPath(Part),
     Suspend,
@@ -243,9 +241,7 @@ pub const KEYMAP: &[(&[Key], Action)] = &[
     (&[key('N')], Action::FindNext(true)),
     (&[key('f')], Action::Filter),
     (&[key('!')], Action::Run("pwsh")),
-    (&[key('s')], Action::Cd),
     (&[key('z')], Action::Jump("fzf")),
-    (&[key('Z')], Action::Jump("zoxide query -i")),
     (&[key('c'), key('c')], Action::CopyPath(Part::Path)),
     (&[key('c'), key('d')], Action::CopyPath(Part::Dir)),
     (&[key('c'), key('f')], Action::CopyPath(Part::Name)),

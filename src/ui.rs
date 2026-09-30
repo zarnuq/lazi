@@ -89,7 +89,6 @@ fn draw_status(buf: &mut Buffer, area: Rect, app: &App) -> Option<(u16, u16)> {
         Some(Prompt::Rename { input: i, .. }) => return input(buf, "Rename: ", i),
         Some(Prompt::Find { input: i, backward, .. }) => return input(buf, if *backward { "Find ↑: " } else { "Find: " }, i),
         Some(Prompt::Filter(i)) => return input(buf, "Filter: ", i),
-        Some(Prompt::Cd(i)) => return input(buf, "cd: ", i),
         Some(Prompt::Confirm { question, .. }) => {
             buf.set_stringn(area.x, area.y, question, width, Style::new());
             return None;
