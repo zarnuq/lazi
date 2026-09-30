@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::env;
 use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -6,8 +7,15 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::{CACHE_MAX, SCROLLOFF, SHOW_HIDDEN};
+use crate::config::{CACHE_MAX, Opener, SCROLLOFF, SHOW_HIDDEN};
 use crate::fs::{Entry, Listing};
+
+/// The `O` popup: every opener for the targeted files.
+pub struct Menu {
+    pub openers: &'static [Opener],
+    pub files: Vec<PathBuf>,
+    pub cursor: usize,
+}
 
 pub struct App {
     pub cwd: PathBuf,
@@ -15,6 +23,9 @@ pub struct App {
     pub offset: usize,
     /// Rows in the listing area at the last draw, for page-sized moves.
     pub height: usize,
+    /// Shown in the status line until the next key.
+    pub error: Option<String>,
+    pub menu: Option<Menu>,
     show_hidden: bool,
     cache: HashMap<PathBuf, Listing>,
     loading: HashSet<PathBuf>,
@@ -34,6 +45,8 @@ impl App {
             cursor: 0,
             offset: 0,
             height: 0,
+            error: None,
+            menu: None,
             show_hidden: SHOW_HIDDEN,
             cache: HashMap::new(),
             loading: HashSet::new(),
@@ -61,6 +74,12 @@ impl App {
 
     pub fn hovered_in(&self, dir: &Path) -> Option<&OsStr> {
         self.hovered.get(dir).map(OsString::as_os_str)
+    }
+
+    /// The hovered entry's path, and whether it is a directory.
+    pub fn hovered(&self) -> Option<(PathBuf, bool)> {
+        let entry = self.entries().get(self.cursor)?;
+        Some((self.cwd.join(&entry.name), entry.is_dir))
     }
 
     /// The hovered directory, shown in the preview column.
@@ -102,6 +121,18 @@ impl App {
     pub fn enter(&mut self) {
         if let Some(dir) = self.preview_dir() {
             self.cd(dir);
+        }
+    }
+
+    pub fn goto(&mut self, dir: &str) {
+        let dir = match (dir.strip_prefix('~'), env::var_os("HOME")) {
+            (Some(rest), Some(home)) => PathBuf::from(home).join(rest.trim_start_matches('/')),
+            _ => PathBuf::from(dir),
+        };
+        if dir.is_dir() {
+            self.cd(dir);
+        } else {
+            self.error = Some(format!("not a directory: {}", dir.display()));
         }
     }
 
@@ -163,6 +194,9 @@ impl App {
     }
 
     fn cd(&mut self, dir: PathBuf) {
+        if dir == self.cwd {
+            return;
+        }
         let old = mem::replace(&mut self.cwd, dir);
         self.back.push(old);
         self.forward.clear();

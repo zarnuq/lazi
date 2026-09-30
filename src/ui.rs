@@ -5,8 +5,9 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
+use ratatui::widgets::{Block, Clear, Widget};
 
-use crate::app::App;
+use crate::app::{App, Menu};
 use crate::config::{CURSOR, DIM, DIR, ERROR, HEADER, LINK, RATIO, SCROLLOFF};
 use crate::fs::Listing;
 
@@ -41,7 +42,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     let status_y = area.bottom() - 1;
-    if app.is_loading() {
+    if let Some(err) = &app.error {
+        buf.set_stringn(area.x, status_y, err, area.width as usize, ERROR);
+    } else if app.is_loading() {
         buf.set_stringn(area.x, status_y, "loading…", area.width as usize, DIM);
     }
     let len = app.entries().len();
@@ -50,9 +53,35 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let x = area.right().saturating_sub(pos.len() as u16);
         buf.set_stringn(x, status_y, pos, area.width as usize, Style::new());
     }
+
+    if let Some(menu) = &app.menu {
+        draw_menu(buf, area, menu);
+    }
 }
 
-fn header(cwd: &Path) -> String {
+/// A centred box listing the openers, numbered for quick picking.
+fn draw_menu(buf: &mut Buffer, area: Rect, menu: &Menu) {
+    let inner_width = menu.openers.iter().map(|o| o.desc.chars().count()).max().unwrap_or(0) as u16 + 4;
+    let width = (inner_width + 2).max(14).min(area.width);
+    let height = (menu.openers.len() as u16 + 2).min(area.height);
+    let rect = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + (area.height - height) / 2,
+        width,
+        height,
+    };
+    Clear.render(rect, buf);
+    let block = Block::bordered().title(" Open with ");
+    let inner = block.inner(rect);
+    block.render(rect, buf);
+    for (i, (y, opener)) in (inner.y..inner.bottom()).zip(menu.openers).enumerate() {
+        let style = if i == menu.cursor { CURSOR } else { Style::new() };
+        buf.set_style(Rect { y, height: 1, ..inner }, style);
+        buf.set_stringn(inner.x + 1, y, format!("{} {}", i + 1, opener.desc), (inner.width as usize).saturating_sub(1), style);
+    }
+}
+
+pub fn header(cwd: &Path) -> String {
     if let Some(home) = env::var_os("HOME")
         && let Ok(rest) = cwd.strip_prefix(home)
     {

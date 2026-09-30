@@ -6,6 +6,8 @@ use ratatui::crossterm::event::KeyCode::{self, Down, Left, PageDown, PageUp, Rig
 use ratatui::crossterm::event::KeyModifiers;
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::open::Kind;
+
 pub const SHOW_HIDDEN: bool = true;
 pub const SCROLLOFF: usize = 5;
 /// Width ratio of the parent, current and preview columns.
@@ -38,6 +40,52 @@ pub enum Action {
     Back,
     Forward,
     ToggleHidden,
+    /// Go to a directory; a leading `~` is $HOME.
+    Goto(&'static str),
+    Open,
+    /// Pick from all the openers for the hovered file.
+    OpenWith,
+    /// Quit without writing the cwd file, so the shell stays where it was.
+    QuitNoCwd,
+}
+
+pub struct Opener {
+    pub desc: &'static str,
+    /// A `sh -c` snippet; the files are "$@".
+    pub run: &'static str,
+    /// Hand the terminal over and wait, instead of detaching.
+    pub block: bool,
+}
+
+const fn block(desc: &'static str, run: &'static str) -> Opener {
+    Opener { desc, run, block: true }
+}
+const fn detach(desc: &'static str, run: &'static str) -> Opener {
+    Opener { desc, run, block: false }
+}
+
+const SHELL: Opener = block("Shell here", r#"cd "$1" && exec "$SHELL""#);
+const EDIT: Opener = block("$EDITOR", r#"${EDITOR:-nvim} "$@""#);
+const OPEN: Opener = detach("Open", r#"xdg-open "$1""#);
+const REVEAL: Opener = detach("Reveal", r#"xdg-open "$(dirname "$1")""#);
+const VIEW: Opener = detach("View", r#"swayimg "$1""#);
+const SETBG: Opener = detach("Set wallpaper", r#"qs ipc call wallpaper set "$1""#);
+const READ: Opener = detach("Read", r#"zathura "$1""#);
+const PLAY: Opener = detach("Play", r#"mpv --force-window "$@""#);
+const MEDIAINFO: Opener = block("Media info", r#"mediainfo "$1"; echo "Press enter to exit"; read _"#);
+const EXTRACT: Opener = detach("Extract here", r#"for f; do bsdtar -xf "$f"; done"#);
+
+/// `o` runs the first opener; `O` offers them all.
+pub fn openers(kind: Kind) -> &'static [Opener] {
+    match kind {
+        Kind::Dir => &[SHELL, EDIT, REVEAL],
+        Kind::Image => &[VIEW, SETBG, OPEN, REVEAL],
+        Kind::Pdf => &[READ, OPEN, REVEAL],
+        Kind::Media => &[PLAY, MEDIAINFO, REVEAL],
+        Kind::Archive => &[EXTRACT, OPEN, REVEAL],
+        Kind::Text => &[EDIT, REVEAL],
+        Kind::Other => &[OPEN, REVEAL],
+    }
 }
 
 pub type Key = (KeyCode, KeyModifiers);
@@ -57,6 +105,7 @@ const fn shift(c: KeyCode) -> Key {
 
 pub const KEYMAP: &[(&[Key], Action)] = &[
     (&[key('q')], Action::Quit),
+    (&[key('Q')], Action::QuitNoCwd),
     (&[ctrl('c')], Action::Quit),
     (&[key('k')], Action::Move(-1)),
     (&[key('j')], Action::Move(1)),
@@ -79,6 +128,12 @@ pub const KEYMAP: &[(&[Key], Action)] = &[
     (&[key('H')], Action::Back),
     (&[key('L')], Action::Forward),
     (&[key('.')], Action::ToggleHidden),
+    (&[key('g'), key('h')], Action::Goto("~")),
+    (&[key('g'), key('c')], Action::Goto("~/.config")),
+    (&[key('g'), key('d')], Action::Goto("~/Downloads")),
+    (&[key('o')], Action::Open),
+    (&[code(KeyCode::Enter)], Action::Open),
+    (&[key('O')], Action::OpenWith),
 ];
 
 pub enum Lookup {
