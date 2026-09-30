@@ -5,9 +5,14 @@ mod input;
 mod open;
 mod ops;
 mod ui;
+mod wake;
+mod watch;
 
 use std::os::unix::ffi::OsStrExt;
 use std::ffi::OsStr;
+use std::fs::File;
+use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{env, io};
@@ -50,7 +55,7 @@ fn main() -> io::Result<()> {
         None => env::current_dir()?,
     };
 
-    let mut app = App::new(cwd);
+    let mut app = App::new(cwd)?;
     let mut term = ratatui::init();
     let res = run(&mut term, &mut app, bench.then_some(start));
     ratatui::restore();
@@ -69,6 +74,22 @@ fn main() -> io::Result<()> {
 }
 
 fn run(term: &mut DefaultTerminal, app: &mut App, bench: Option<Instant>) -> io::Result<Exit> {
+    // crossterm reads keys from stdin if it's a terminal, else from /dev/tty; sleep on the same.
+    let tty_file;
+    // SAFETY: isatty has no preconditions.
+    let tty = if unsafe { libc::isatty(0) } == 1 {
+        0
+    } else {
+        tty_file = File::open("/dev/tty")?;
+        tty_file.as_raw_fd()
+    };
+    // A resize has to wake the sleep too; the next draw picks up the new size.
+    let (winch, winch_tx) = UnixStream::pair()?;
+    winch.set_nonblocking(true)?;
+    signal_hook::low_level::pipe::register(signal_hook::consts::SIGWINCH, winch_tx)?;
+    let mut fds = vec![tty, winch.as_raw_fd()];
+    fds.extend(app.wake_fds());
+
     let mut pending: Vec<Key> = Vec::new();
     let mut dirty = true;
     loop {
@@ -85,46 +106,54 @@ fn run(term: &mut DefaultTerminal, app: &mut App, bench: Option<Instant>) -> io:
             }
         }
 
-        // Block on input, but wake up periodically while background work is running to pick it up.
-        let ready = match app.poll_timeout() {
-            None => true,
-            Some(timeout) => event::poll(timeout)?,
-        };
-        if ready {
-            match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    app.error = None;
-                    app.info = None;
-                    dirty = true;
-                    let key = normalize(key);
-                    if app.prompt.is_some() {
-                        prompt_key(app, key);
-                        continue;
-                    }
-                    if app.menu.is_some() {
-                        menu_key(term, app, key)?;
-                        continue;
-                    }
-                    pending.push(key);
-                    match config::lookup(&pending) {
-                        Lookup::Pending => {}
-                        Lookup::Unbound => pending.clear(),
-                        Lookup::Action(action) => {
-                            pending.clear();
-                            // Pick up outside changes first, so e.g. `gg` lands on a file created since the last read.
-                            app.refresh();
-                            app.receive(Some(LOAD_GRACE));
-                            if let Some(exit) = apply(term, app, action)? {
-                                return Ok(exit);
-                            }
-                        }
-                    }
-                }
-                Event::Resize(..) => dirty = true,
-                _ => {}
+        // Sleep until a key, a worker thread, a filesystem change or a resize, unless crossterm
+        // already has input buffered from an earlier read.
+        if !event::poll(Duration::ZERO)? {
+            wake::wait(&fds)?;
+        }
+        dirty |= wake::drain(winch.as_raw_fd());
+        dirty |= app.on_wake();
+        while event::poll(Duration::ZERO)? {
+            dirty = true;
+            if let Some(exit) = handle(term, app, &mut pending, event::read()?)? {
+                return Ok(exit);
             }
         }
         dirty |= app.receive(Some(Duration::ZERO));
+    }
+}
+
+fn handle(term: &mut DefaultTerminal, app: &mut App, pending: &mut Vec<Key>, event: Event) -> io::Result<Option<Exit>> {
+    let Event::Key(key) = event else { return Ok(None) };
+    if key.kind != KeyEventKind::Press {
+        return Ok(None);
+    }
+    app.error = None;
+    app.info = None;
+    let key = normalize(key);
+    if app.prompt.is_some() {
+        prompt_key(app, key);
+        return Ok(None);
+    }
+    if app.menu.is_some() {
+        menu_key(term, app, key)?;
+        return Ok(None);
+    }
+    pending.push(key);
+    match config::lookup(pending) {
+        Lookup::Pending => Ok(None),
+        Lookup::Unbound => {
+            pending.clear();
+            Ok(None)
+        }
+        Lookup::Action(action) => {
+            pending.clear();
+            // Pick up outside changes first, so e.g. `gg` lands on a file created since the last
+            // read. inotify usually got there already; this covers filesystems it doesn't.
+            app.refresh();
+            app.receive(Some(LOAD_GRACE));
+            apply(term, app, action)
+        }
     }
 }
 

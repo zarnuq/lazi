@@ -19,14 +19,8 @@ pub const RATIO: [u16; 3] = [2, 5, 8];
 
 /// How long a frame waits for directory reads before drawing without them.
 pub const LOAD_GRACE: Duration = Duration::from_millis(10);
-/// How often to check on reads still running after that.
-pub const LOAD_POLL: Duration = Duration::from_millis(5);
-/// How often to redraw while file operations run.
-pub const TASK_POLL: Duration = Duration::from_millis(100);
 /// Minimum gap between progress reports from a file operation.
 pub const PROGRESS_EVERY: Duration = Duration::from_millis(50);
-/// How long to keep an eye out for a detached program failing right after it starts.
-pub const FAIL_WATCH: Duration = Duration::from_secs(3);
 /// Cached listings beyond this are dropped, except the ones on screen.
 pub const CACHE_MAX: usize = 256;
 

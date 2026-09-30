@@ -3,17 +3,21 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::mem;
 use std::path::{Component, Path, PathBuf};
+use std::io;
+use std::os::fd::RawFd;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config::{
-    CACHE_MAX, CONFIRM_TRASH, FAIL_WATCH, LOAD_POLL, Opener, PROGRESS_EVERY, Part, SCROLLOFF, SHOW_HIDDEN, TASK_POLL,
+    CACHE_MAX, CONFIRM_TRASH, Opener, PROGRESS_EVERY, Part, SCROLLOFF, SHOW_HIDDEN,
 };
 use crate::fs::{Entry, Listing, Matcher};
 use crate::input::Input;
 use crate::open;
 use crate::ops::{Op, Progress};
+use crate::wake::Waker;
+use crate::watch::Watcher;
 
 /// What worker threads send back.
 pub enum Msg {
@@ -23,6 +27,21 @@ pub enum Msg {
     Done(u64, Vec<String>),
     /// A detached program failed.
     Failed(String),
+}
+
+/// Sends to the main loop and wakes it, since it may be asleep in `wake::wait`.
+#[derive(Clone)]
+struct Notifier {
+    tx: Sender<Msg>,
+    waker: Waker,
+}
+
+impl Notifier {
+    fn send(&self, msg: Msg) {
+        if self.tx.send(msg).is_ok() {
+            self.waker.wake();
+        }
+    }
 }
 
 /// The `O` popup: every opener for the targeted files.
@@ -91,8 +110,6 @@ pub struct App {
     pub filter: Option<Filter>,
     /// The find query, kept after the prompt closes for `n`/`N`.
     pub find: Option<String>,
-    /// Until when a detached program's early failure is worth waking up for.
-    watch_until: Option<Instant>,
     pub menu: Option<Menu>,
     pub prompt: Option<Prompt>,
     pub selected: BTreeSet<PathBuf>,
@@ -107,13 +124,15 @@ pub struct App {
     hovered: HashMap<PathBuf, OsString>,
     back: Vec<PathBuf>,
     forward: Vec<PathBuf>,
-    tx: Sender<Msg>,
+    notify: Notifier,
     rx: Receiver<Msg>,
+    watcher: Option<Watcher>,
 }
 
 impl App {
-    pub fn new(cwd: PathBuf) -> Self {
+    pub fn new(cwd: PathBuf) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
+        let notify = Notifier { tx, waker: Waker::new()? };
         let mut app = Self {
             cwd,
             cursor: 0,
@@ -123,7 +142,6 @@ impl App {
             info: None,
             filter: None,
             find: None,
-            watch_until: None,
             menu: None,
             prompt: None,
             selected: BTreeSet::new(),
@@ -137,15 +155,16 @@ impl App {
             hovered: HashMap::new(),
             back: Vec::new(),
             forward: Vec::new(),
-            tx,
+            notify,
             rx,
+            watcher: Watcher::new(),
         };
         // The cwd is read inline: there is nothing to draw without it anyway.
         let listing = Listing::read(&app.cwd, app.show_hidden);
         app.cache.insert(app.cwd.clone(), listing);
         app.remember();
         app.refresh();
-        app
+        Ok(app)
     }
 
     pub fn listing(&self, dir: &Path) -> Option<&Listing> {
@@ -184,15 +203,28 @@ impl App {
         self.visual.is_some()
     }
 
-    /// How long waiting for input may block before background work needs a look; None is forever.
-    pub fn poll_timeout(&self) -> Option<Duration> {
-        if self.is_loading() {
-            Some(LOAD_POLL)
-        } else if !self.tasks.is_empty() || self.watch_until.is_some_and(|t| Instant::now() < t) {
-            Some(TASK_POLL)
-        } else {
-            None
+    /// What `wake::wait` should watch on the app's behalf.
+    pub fn wake_fds(&self) -> Vec<RawFd> {
+        let mut fds = vec![self.notify.waker.fd()];
+        fds.extend(self.watcher.as_ref().map(Watcher::fd));
+        fds
+    }
+
+    /// Handles a wakeup: re-reads directories inotify says changed. Messages from workers are
+    /// picked up by `receive`. Returns whether anything changed.
+    pub fn on_wake(&mut self) -> bool {
+        crate::wake::drain(self.notify.waker.fd());
+        let changed = self.watcher.as_mut().map(Watcher::changed).unwrap_or_default();
+        for dir in &changed {
+            if let Some(listing) = self.cache.get_mut(dir) {
+                listing.invalidate();
+            }
         }
+        if changed.is_empty() {
+            return false;
+        }
+        self.refresh();
+        true
     }
 
     /// How `entry` (at `index` in `dir`) should be marked: selection wins over the yank register.
@@ -543,13 +575,11 @@ impl App {
         }
     }
 
-    /// A callback for a detached program to report failure through, which also keeps the
-    /// main loop checking in for a little while.
-    pub fn on_fail(&mut self) -> Box<dyn FnOnce(String) + Send> {
-        self.watch_until = Some(Instant::now() + FAIL_WATCH);
-        let tx = self.tx.clone();
+    /// A callback for a detached program to report failure through.
+    pub fn on_fail(&self) -> Box<dyn FnOnce(String) + Send> {
+        let notify = self.notify.clone();
         Box::new(move |msg| {
-            let _ = tx.send(Msg::Failed(msg));
+            notify.send(Msg::Failed(msg));
         })
     }
 
@@ -644,17 +674,17 @@ impl App {
         let id = self.next_task;
         self.next_task += 1;
         self.tasks.insert(id, Progress { label: op.label(), done: 0, total: 0, bytes: false });
-        let tx = self.tx.clone();
+        let notify = self.notify.clone();
         thread::spawn(move || {
             let mut last: Option<Instant> = None;
             let errors = op.run(&mut |progress| {
                 // A few updates a second is plenty, however many files go by.
                 if last.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
                     last = Some(Instant::now());
-                    let _ = tx.send(Msg::Progress(id, progress));
+                    notify.send(Msg::Progress(id, progress));
                 }
             });
-            let _ = tx.send(Msg::Done(id, errors));
+            notify.send(Msg::Done(id, errors));
         });
     }
 
@@ -724,6 +754,9 @@ impl App {
         for dir in &visible {
             self.ensure(dir);
         }
+        if let Some(watcher) = &mut self.watcher {
+            watcher.set(&visible);
+        }
         if self.cache.len() > CACHE_MAX {
             self.cache.retain(|dir, _| visible.contains(dir));
         }
@@ -735,10 +768,10 @@ impl App {
             return;
         }
         self.loading.insert(dir.to_path_buf());
-        let (dir, tx, hidden) = (dir.to_path_buf(), self.tx.clone(), self.show_hidden);
+        let (dir, notify, hidden) = (dir.to_path_buf(), self.notify.clone(), self.show_hidden);
         thread::spawn(move || {
             let listing = Listing::read(&dir, hidden);
-            let _ = tx.send(Msg::Listed(dir, listing));
+            notify.send(Msg::Listed(dir, listing));
         });
     }
 }

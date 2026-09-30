@@ -16,6 +16,9 @@ pub struct Listing {
     /// The directory's mtime when read. Creating, deleting or renaming anything inside bumps it.
     mtime: Option<SystemTime>,
     hidden: bool,
+    /// Known to be out of date whatever the mtime says, e.g. from an inotify event landing
+    /// within the same mtime tick as the last read.
+    stale: bool,
 }
 
 impl Listing {
@@ -26,11 +29,15 @@ impl Listing {
             Ok(entries) => (entries, None),
             Err(e) => (Vec::new(), Some(e.to_string())),
         };
-        Self { entries, error, mtime, hidden: show_hidden }
+        Self { entries, error, mtime, hidden: show_hidden, stale: false }
     }
 
     pub fn is_fresh(&self, dir: &Path, show_hidden: bool) -> bool {
-        self.hidden == show_hidden && self.mtime == mtime(dir)
+        !self.stale && self.hidden == show_hidden && self.mtime == mtime(dir)
+    }
+
+    pub fn invalidate(&mut self) {
+        self.stale = true;
     }
 
     pub fn position(&self, name: &OsStr) -> Option<usize> {
