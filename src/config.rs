@@ -9,6 +9,10 @@ use ratatui::style::{Color, Modifier, Style};
 use crate::open::Kind;
 
 pub const SHOW_HIDDEN: bool = true;
+/// Colours for code previews: one of syntect's bundled themes, i.e. base16-ocean.dark,
+/// base16-eighties.dark, base16-mocha.dark, base16-ocean.light, InspiredGitHub,
+/// Solarized (dark) or Solarized (light).
+pub const SYNTAX_THEME: &str = "base16-ocean.dark";
 /// Columns per tab stop in text previews.
 pub const TAB_SIZE: usize = 5;
 /// Largest image size (pixels) sent to the terminal, whatever the preview area.

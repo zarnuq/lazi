@@ -1,5 +1,6 @@
 //! File previews, built on a worker thread that only ever works on the latest request.
 
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::process::CommandExt;
@@ -7,15 +8,19 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::{Instant, SystemTime};
 
 use image::DynamicImage;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{FontStyle, Theme, ThemeSet};
+use syntect::parsing::SyntaxSet;
+use syntect::util::LinesWithEndings;
 
-use crate::config::{IMAGE_MAX, PREVIEW_TIMEOUT, Previewer, TAB_SIZE, previewer};
+use crate::config::{IMAGE_MAX, PREVIEW_TIMEOUT, Previewer, SYNTAX_THEME, TAB_SIZE, previewer};
 use crate::open;
 
 /// Text previews stop after this much input, or this many lines.
@@ -75,8 +80,11 @@ impl Worker {
                         slot = ready.wait(slot).unwrap_or_else(|e| e.into_inner());
                     }
                 };
+                // Whether a newer request is waiting, making this one pointless to finish.
+                let stale = || inbox.0.lock().is_ok_and(|slot| slot.is_some());
+                let mut partial = |preview| done(req.clone(), preview);
                 // A decoder choking on a corrupt file shouldn't take lazi down with it.
-                let preview = panic::catch_unwind(AssertUnwindSafe(|| build(&req)))
+                let preview = panic::catch_unwind(AssertUnwindSafe(|| build(&req, &mut partial, &stale)))
                     .unwrap_or_else(|_| Preview::Note("previewer crashed".into()));
                 done(req, preview);
             }
@@ -91,10 +99,12 @@ impl Worker {
     }
 }
 
-fn build(req: &Request) -> Preview {
+/// `partial` receives an early version of a slow preview (the first screen of highlighted code).
+/// `stale` says a newer request is waiting, so the rest isn't worth finishing.
+fn build(req: &Request, partial: &mut dyn FnMut(Preview), stale: &dyn Fn() -> bool) -> Preview {
     let kind = open::kind(&req.path, false);
     let res = match previewer(kind) {
-        Previewer::Text => text(&req.path),
+        Previewer::Text => text(req, partial, stale),
         Previewer::Image => image(req),
         Previewer::ImageCmd(script) => image_cmd(req, script),
         Previewer::Cmd(script) => run(script, req, MAX_BYTES).map(|out| Preview::Text(lines(&out))),
@@ -102,10 +112,106 @@ fn build(req: &Request) -> Preview {
     res.unwrap_or_else(Preview::Note)
 }
 
-fn text(path: &Path) -> Result<Preview, String> {
+fn text(req: &Request, partial: &mut dyn FnMut(Preview), stale: &dyn Fn() -> bool) -> Result<Preview, String> {
     let mut buf = Vec::new();
-    File::open(path).and_then(|f| f.take(MAX_BYTES).read_to_end(&mut buf)).map_err(|e| e.to_string())?;
-    Ok(Preview::Text(lines(&buf)))
+    File::open(&req.path).and_then(|f| f.take(MAX_BYTES).read_to_end(&mut buf)).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&buf);
+    // Highlighting runs at roughly 10k lines a second, so the first screen goes out on its own.
+    let first = req.rows as usize;
+    let mut first_screen = |lines| partial(Preview::Text(lines));
+    let highlighted = highlight(&req.path, &text, first, &mut first_screen, stale);
+    Ok(Preview::Text(highlighted.unwrap_or_else(|| lines(&buf))))
+}
+
+struct Highlighter {
+    syntaxes: SyntaxSet,
+    theme: Theme,
+}
+
+/// syntect's bundled grammars and themes, loaded on first use.
+fn highlighter() -> &'static Highlighter {
+    static HIGHLIGHTER: OnceLock<Highlighter> = OnceLock::new();
+    HIGHLIGHTER.get_or_init(|| {
+        let mut themes = ThemeSet::load_defaults().themes;
+        let theme = themes.remove(SYNTAX_THEME).expect("SYNTAX_THEME names one of syntect's bundled themes");
+        Highlighter { syntaxes: SyntaxSet::load_defaults_newlines(), theme }
+    })
+}
+
+/// Syntax colouring, found by extension, then file name (Makefile), then first line (#!).
+/// None for plain text, and for text that brings its own colours, like a coloured log.
+fn highlight(
+    path: &Path,
+    text: &str,
+    first: usize,
+    partial: &mut dyn FnMut(Vec<Line<'static>>),
+    stale: &dyn Fn() -> bool,
+) -> Option<Vec<Line<'static>>> {
+    if text.contains('\x1b') {
+        return None;
+    }
+    let Highlighter { syntaxes, theme } = highlighter();
+    let by_ext = |name: Option<&OsStr>| syntaxes.find_syntax_by_extension(name?.to_str()?);
+    let syntax = by_ext(path.extension())
+        .or_else(|| by_ext(path.file_name()))
+        .or_else(|| syntaxes.find_syntax_by_first_line(text.lines().next()?))?;
+    if syntax.name == "Plain Text" {
+        return None;
+    }
+    let mut highlighter = HighlightLines::new(syntax, theme);
+    let mut out = Vec::new();
+    for (i, line) in LinesWithEndings::from(text).take(MAX_LINES).enumerate() {
+        if i == first {
+            partial(out.clone());
+        }
+        if i % 32 == 0 && stale() {
+            break;
+        }
+        let ranges = highlighter.highlight_line(line, syntaxes).ok()?;
+        let mut col = 0;
+        let spans = ranges.into_iter().map(|(style, piece)| {
+            let mut buf = String::new();
+            push_expanded(&mut buf, piece, &mut col);
+            Span::styled(buf, from_syntect(style))
+        });
+        out.push(Line::from(spans.collect::<Vec<_>>()));
+    }
+    Some(out)
+}
+
+/// The theme's foreground and font style; its background is left to the terminal.
+fn from_syntect(style: syntect::highlighting::Style) -> Style {
+    let fg = style.foreground;
+    let mut out = Style::new().fg(Color::Rgb(fg.r, fg.g, fg.b));
+    for (font, modifier) in [
+        (FontStyle::BOLD, Modifier::BOLD),
+        (FontStyle::ITALIC, Modifier::ITALIC),
+        (FontStyle::UNDERLINE, Modifier::UNDERLINED),
+    ] {
+        if style.font_style.contains(font) {
+            out = out.add_modifier(modifier);
+        }
+    }
+    out
+}
+
+/// Appends `text`, expanding tabs against the running column `col` and dropping other control
+/// characters (newlines included).
+fn push_expanded(buf: &mut String, text: &str, col: &mut usize) {
+    for c in text.chars() {
+        match c {
+            '\t' => {
+                let n = TAB_SIZE - *col % TAB_SIZE;
+                buf.extend(std::iter::repeat_n(' ', n));
+                *col += n;
+            }
+            c if c.is_control() => {}
+            c => {
+                buf.push(c);
+                *col += 1;
+            }
+        }
+    }
 }
 
 fn image(req: &Request) -> Result<Preview, String> {
@@ -244,16 +350,7 @@ fn lines(bytes: &[u8]) -> Vec<Line<'static>> {
                         style = sgr(style, &params);
                     }
                 }
-                '\t' => {
-                    let n = TAB_SIZE - col % TAB_SIZE;
-                    buf.extend(std::iter::repeat_n(' ', n));
-                    col += n;
-                }
-                c if c.is_control() => {}
-                c => {
-                    buf.push(c);
-                    col += 1;
-                }
+                c => push_expanded(&mut buf, c.encode_utf8(&mut [0; 4]), &mut col),
             }
         }
         if !buf.is_empty() {

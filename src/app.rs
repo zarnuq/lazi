@@ -689,8 +689,13 @@ impl App {
                 }
                 Msg::Failed(msg) => self.error = Some(msg),
                 Msg::Preview(req, preview) => {
+                    // A fuller version of the preview already showing (the rest of highlighted code).
+                    if let Some((current, old)) = &mut self.preview
+                        && *current == req
+                    {
+                        *old = preview;
                     // Anything else is for a file already scrolled past.
-                    if self.preview_wanted.as_ref() == Some(&req) {
+                    } else if self.preview_wanted.as_ref() == Some(&req) {
                         if self.preview.as_ref().is_none_or(|(old, _)| old.path != req.path) {
                             self.preview_scroll = 0;
                         }
