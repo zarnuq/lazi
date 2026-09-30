@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use ratatui::crossterm::event::KeyCode::{self, Down, Left, PageDown, PageUp, Right, Up};
+use ratatui::crossterm::event::KeyCode::{self, Down, Esc, Left, PageDown, PageUp, Right, Up};
 use ratatui::crossterm::event::KeyModifiers;
 use ratatui::style::{Color, Modifier, Style};
 
@@ -10,6 +10,8 @@ use crate::open::Kind;
 
 pub const SHOW_HIDDEN: bool = true;
 pub const SCROLLOFF: usize = 5;
+/// Ask before trashing. Permanent deletes always ask.
+pub const CONFIRM_TRASH: bool = true;
 /// Width ratio of the parent, current and preview columns.
 pub const RATIO: [u16; 3] = [2, 5, 8];
 
@@ -17,6 +19,10 @@ pub const RATIO: [u16; 3] = [2, 5, 8];
 pub const LOAD_GRACE: Duration = Duration::from_millis(10);
 /// How often to check on reads still running after that.
 pub const LOAD_POLL: Duration = Duration::from_millis(5);
+/// How often to redraw while file operations run.
+pub const TASK_POLL: Duration = Duration::from_millis(100);
+/// Minimum gap between progress reports from a file operation.
+pub const PROGRESS_EVERY: Duration = Duration::from_millis(50);
 /// Cached listings beyond this are dropped, except the ones on screen.
 pub const CACHE_MAX: usize = 256;
 
@@ -26,6 +32,10 @@ pub const LINK: Style = Style::new().fg(Color::Cyan);
 pub const CURSOR: Style = Style::new().add_modifier(Modifier::REVERSED);
 pub const ERROR: Style = Style::new().fg(Color::Red);
 pub const DIM: Style = Style::new().add_modifier(Modifier::DIM);
+/// The bar left of a marked entry.
+pub const MARK_SELECTED: Style = Style::new().bg(Color::Yellow);
+pub const MARK_COPIED: Style = Style::new().bg(Color::Green);
+pub const MARK_CUT: Style = Style::new().bg(Color::Red);
 
 #[derive(Clone, Copy)]
 pub enum Action {
@@ -47,6 +57,24 @@ pub enum Action {
     OpenWith,
     /// Quit without writing the cwd file, so the shell stays where it was.
     QuitNoCwd,
+    /// Toggle the hovered entry's selection and move down.
+    ToggleSelect,
+    SelectAll,
+    InvertSelection,
+    /// Visual mode; `true` unselects the range instead.
+    Visual(bool),
+    /// Leave visual mode, or clear the selection.
+    Escape,
+    /// Yank the targets; `true` cuts.
+    Yank(bool),
+    Unyank,
+    /// Paste the yanked files here; `true` overwrites instead of renaming.
+    Paste(bool),
+    /// Trash the targets; `true` deletes permanently.
+    Remove(bool),
+    /// Create a file, or a directory if the name ends in `/`.
+    Create,
+    Rename,
 }
 
 pub struct Opener {
@@ -134,6 +162,22 @@ pub const KEYMAP: &[(&[Key], Action)] = &[
     (&[key('o')], Action::Open),
     (&[code(KeyCode::Enter)], Action::Open),
     (&[key('O')], Action::OpenWith),
+    (&[key(' ')], Action::ToggleSelect),
+    (&[ctrl('a')], Action::SelectAll),
+    (&[ctrl('r')], Action::InvertSelection),
+    (&[key('v')], Action::Visual(false)),
+    (&[key('V')], Action::Visual(true)),
+    (&[code(Esc)], Action::Escape),
+    (&[key('y')], Action::Yank(false)),
+    (&[key('x')], Action::Yank(true)),
+    (&[key('Y')], Action::Unyank),
+    (&[key('X')], Action::Unyank),
+    (&[key('p')], Action::Paste(false)),
+    (&[key('P')], Action::Paste(true)),
+    (&[key('d')], Action::Remove(false)),
+    (&[key('D')], Action::Remove(true)),
+    (&[key('a')], Action::Create),
+    (&[key('r')], Action::Rename),
 ];
 
 pub enum Lookup {

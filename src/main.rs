@@ -1,7 +1,9 @@
 mod app;
 mod config;
 mod fs;
+mod input;
 mod open;
+mod ops;
 mod ui;
 
 use std::os::unix::ffi::OsStrExt;
@@ -15,8 +17,8 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, Ke
 use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate, SetTitle};
 use ratatui::crossterm::{execute, queue};
 
-use app::{App, Menu};
-use config::{Action, Key, LOAD_GRACE, LOAD_POLL, Lookup, Opener};
+use app::{App, Menu, Prompt};
+use config::{Action, Key, LOAD_GRACE, Lookup, Opener};
 
 enum Exit {
     Quit,
@@ -85,13 +87,21 @@ fn run(term: &mut DefaultTerminal, app: &mut App, bench: Option<Instant>) -> io:
             }
         }
 
-        // Block on input, but wake up periodically while reads are running to pick them up.
-        if !app.is_loading() || event::poll(LOAD_POLL)? {
+        // Block on input, but wake up periodically while background work is running to pick it up.
+        let ready = match app.poll_timeout() {
+            None => true,
+            Some(timeout) => event::poll(timeout)?,
+        };
+        if ready {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     app.error = None;
                     dirty = true;
                     let key = normalize(key);
+                    if app.prompt.is_some() {
+                        prompt_key(app, key);
+                        continue;
+                    }
                     if app.menu.is_some() {
                         menu_key(term, app, key)?;
                         continue;
@@ -133,18 +143,29 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: Action) -> io::Resul
         Action::Forward => app.forward(),
         Action::ToggleHidden => app.toggle_hidden(),
         Action::Goto(dir) => app.goto(dir),
-        Action::Open => {
-            if let Some((path, is_dir)) = app.hovered() {
-                let opener = &config::openers(open::kind(&path, is_dir))[0];
-                run_opener(term, app, opener, &[path])?;
+        Action::Open | Action::OpenWith => {
+            let files = app.targets();
+            if let Some(first) = files.first() {
+                // The first target decides the kind, like yazi.
+                let openers = config::openers(open::kind(first, first.is_dir()));
+                if let Action::Open = action {
+                    run_opener(term, app, &openers[0], &files)?;
+                } else {
+                    app.menu = Some(Menu { openers, files, cursor: 0 });
+                }
             }
         }
-        Action::OpenWith => {
-            if let Some((path, is_dir)) = app.hovered() {
-                let openers = config::openers(open::kind(&path, is_dir));
-                app.menu = Some(Menu { openers, files: vec![path], cursor: 0 });
-            }
-        }
+        Action::ToggleSelect => app.toggle_select(),
+        Action::SelectAll => app.select_all(false),
+        Action::InvertSelection => app.select_all(true),
+        Action::Visual(unset) => app.visual(unset),
+        Action::Escape => app.escape(),
+        Action::Yank(cut) => app.yank(cut),
+        Action::Unyank => app.unyank(),
+        Action::Paste(force) => app.paste(force),
+        Action::Remove(permanently) => app.remove(permanently),
+        Action::Create => app.start_create(),
+        Action::Rename => app.start_rename(),
     }
     Ok(None)
 }
@@ -176,6 +197,19 @@ fn menu_key(term: &mut DefaultTerminal, app: &mut App, key: Key) -> io::Result<(
         run_opener(term, app, &menu.openers[i], &menu.files)?;
     }
     Ok(())
+}
+
+/// Keys while a prompt is open: y/n for a confirmation, text editing for the rest.
+fn prompt_key(app: &mut App, key: Key) {
+    match (&mut app.prompt, key.0) {
+        (Some(Prompt::Confirm { .. }), KeyCode::Char('y' | 'Y')) => app.submit(),
+        (Some(Prompt::Confirm { .. }), _) | (_, KeyCode::Esc) => app.prompt = None,
+        (_, KeyCode::Enter) => app.submit(),
+        (Some(Prompt::Create(input) | Prompt::Rename { input, .. }), _) => {
+            input.key(key);
+        }
+        (None, _) => {}
+    }
 }
 
 fn run_opener(term: &mut DefaultTerminal, app: &mut App, opener: &Opener, files: &[PathBuf]) -> io::Result<()> {
