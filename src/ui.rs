@@ -9,9 +9,9 @@ use ratatui::widgets::{Block, Clear, Widget};
 
 use crate::app::{App, Mark, Menu, Prompt};
 use crate::config::{
-    CURSOR, DIM, DIR, ERROR, HEADER, LINK, MARK_COPIED, MARK_CUT, MARK_SELECTED, RATIO, SCROLLOFF,
+    CURSOR, DIM, DIR, ERROR, FIND, HEADER, LINK, MARK_COPIED, MARK_CUT, MARK_SELECTED, RATIO, SCROLLOFF,
 };
-use crate::fs::Listing;
+use crate::fs::{Entry, Listing, Matcher};
 use crate::input::Input;
 
 /// Row 0 is the cwd, the last row is the status line, and the three columns fill the middle.
@@ -36,7 +36,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_side(buf, parent_col, app, parent, listing, cursor);
     }
     if let Some(listing) = app.listing(&app.cwd) {
-        draw_list(buf, cwd_col, app, &app.cwd, listing, Some(app.cursor), app.offset);
+        let list = List { entries: app.entries(), error: listing.error.as_deref(), cursor: Some(app.cursor), offset: app.offset };
+        draw_list(buf, cwd_col, app, &app.cwd, list, app.find_matcher().as_ref());
     }
     if let Some(dir) = app.preview_dir()
         && let Some(listing) = app.listing(&dir)
@@ -60,11 +61,17 @@ fn draw_status(buf: &mut Buffer, area: Rect, app: &App) -> Option<(u16, u16)> {
     let width = area.width as usize;
     let input = |buf: &mut Buffer, label: &str, input: &Input| {
         buf.set_stringn(area.x, area.y, format!("{label}{}", input.text), width, Style::new());
-        Some((area.x + (label.len() + input.cursor_width()).min(width) as u16, area.y))
+        let label_width = label.chars().count();
+        Some((area.x + (label_width + input.cursor_width()).min(width) as u16, area.y))
     };
     match &app.prompt {
         Some(Prompt::Create(i)) => return input(buf, "Create: ", i),
         Some(Prompt::Rename { input: i, .. }) => return input(buf, "Rename: ", i),
+        Some(Prompt::Find { input: i, backward, .. }) => return input(buf, if *backward { "Find ↑: " } else { "Find: " }, i),
+        Some(Prompt::Filter(i)) => return input(buf, "Filter: ", i),
+        Some(Prompt::Shell { input: i, block: false }) => return input(buf, "Shell: ", i),
+        Some(Prompt::Shell { input: i, block: true }) => return input(buf, "Shell (wait): ", i),
+        Some(Prompt::Cd(i)) => return input(buf, "cd: ", i),
         Some(Prompt::Confirm { question, .. }) => {
             buf.set_stringn(area.x, area.y, question, width, Style::new());
             return None;
@@ -72,8 +79,33 @@ fn draw_status(buf: &mut Buffer, area: Rect, app: &App) -> Option<(u16, u16)> {
         None => {}
     }
 
+    let mut right = String::new();
+    if let Some(filter) = &app.filter {
+        right.push_str(&format!("filter: {}  ", filter.query));
+    }
+    if let Some(find) = &app.find {
+        right.push_str(&format!("find: {find}  "));
+    }
+    if app.in_visual() {
+        right.push_str("VISUAL  ");
+    }
+    if !app.selected.is_empty() {
+        right.push_str(&format!("{} selected  ", app.selected.len()));
+    }
+    let len = app.entries().len();
+    if len > 0 {
+        right.push_str(&format!("{}/{len}", app.cursor + 1));
+    }
+    let right_width = right.chars().count();
+    let x = area.right().saturating_sub(right_width as u16);
+    buf.set_stringn(x, area.y, right, width, Style::new());
+
+    // Messages get whatever the right side leaves.
+    let width = width.saturating_sub(right_width + 1);
     if let Some(err) = &app.error {
-        buf.set_stringn(area.x, area.y, err, width, ERROR);
+        buf.set_stringn(area.x, area.y, tail(err, width), width, ERROR);
+    } else if let Some(info) = &app.info {
+        buf.set_stringn(area.x, area.y, info, width, Style::new());
     } else if !app.tasks.is_empty() {
         let tasks: Vec<String> = app
             .tasks
@@ -89,19 +121,6 @@ fn draw_status(buf: &mut Buffer, area: Rect, app: &App) -> Option<(u16, u16)> {
         buf.set_stringn(area.x, area.y, "loading…", width, DIM);
     }
 
-    let mut right = String::new();
-    if app.in_visual() {
-        right.push_str("VISUAL  ");
-    }
-    if !app.selected.is_empty() {
-        right.push_str(&format!("{} selected  ", app.selected.len()));
-    }
-    let len = app.entries().len();
-    if len > 0 {
-        right.push_str(&format!("{}/{len}", app.cursor + 1));
-    }
-    let x = area.right().saturating_sub(right.chars().count() as u16);
-    buf.set_stringn(x, area.y, right, width, Style::new());
     None
 }
 
@@ -127,6 +146,16 @@ fn draw_menu(buf: &mut Buffer, area: Rect, menu: &Menu) {
     }
 }
 
+/// The end of `text` if it's wider than `width`, since errors put the cause last.
+fn tail(text: &str, width: usize) -> String {
+    let len = text.chars().count();
+    if len <= width || width == 0 {
+        return text.to_owned();
+    }
+    let rest: String = text.chars().skip(len - width + 1).collect();
+    format!("…{rest}")
+}
+
 pub fn header(cwd: &Path) -> String {
     if let Some(home) = env::var_os("HOME")
         && let Ok(rest) = cwd.strip_prefix(home)
@@ -147,6 +176,14 @@ fn columns(area: Rect) -> [Rect; 3] {
     ]
 }
 
+/// The rows of one column.
+struct List<'a> {
+    entries: &'a [Entry],
+    error: Option<&'a str>,
+    cursor: Option<usize>,
+    offset: usize,
+}
+
 /// Draws a column with no scroll state of its own, scrolled just enough to show `cursor`.
 fn draw_side(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, listing: &Listing, cursor: Option<usize>) {
     let height = area.height as usize;
@@ -154,24 +191,18 @@ fn draw_side(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, listing: &List
     let offset = cursor
         .map_or(0, |c| (c + so + 1).saturating_sub(height))
         .min(listing.entries.len().saturating_sub(height));
-    draw_list(buf, area, app, dir, listing, cursor, offset);
+    let list = List { entries: &listing.entries, error: listing.error.as_deref(), cursor, offset };
+    draw_list(buf, area, app, dir, list, None);
 }
 
-fn draw_list(
-    buf: &mut Buffer,
-    area: Rect,
-    app: &App,
-    dir: &Path,
-    listing: &Listing,
-    cursor: Option<usize>,
-    offset: usize,
-) {
+/// `find` highlights matching names.
+fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, find: Option<&Matcher>) {
     let width = area.width.saturating_sub(2) as usize;
-    if let Some(err) = &listing.error {
+    if let Some(err) = list.error {
         buf.set_stringn(area.x + 1, area.y, err, width, ERROR);
         return;
     }
-    let rows = listing.entries.iter().enumerate().skip(offset).take(area.height as usize);
+    let rows = list.entries.iter().enumerate().skip(list.offset).take(area.height as usize);
     for (y, (i, entry)) in (area.y..).zip(rows) {
         let mut style = if entry.is_dir {
             DIR
@@ -180,7 +211,10 @@ fn draw_list(
         } else {
             Style::new()
         };
-        if Some(i) == cursor {
+        if find.is_some_and(|m| m.matches(entry)) {
+            style = style.patch(FIND);
+        }
+        if Some(i) == list.cursor {
             buf.set_style(Rect { y, height: 1, ..area }, CURSOR);
             style = style.patch(CURSOR);
         }

@@ -8,7 +8,7 @@ mod ui;
 
 use std::os::unix::ffi::OsStrExt;
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{env, io};
 
@@ -19,6 +19,7 @@ use ratatui::crossterm::{execute, queue};
 
 use app::{App, Menu, Prompt};
 use config::{Action, Key, LOAD_GRACE, Lookup, Opener};
+use open::Cmd;
 
 enum Exit {
     Quit,
@@ -69,17 +70,14 @@ fn main() -> io::Result<()> {
 
 fn run(term: &mut DefaultTerminal, app: &mut App, bench: Option<Instant>) -> io::Result<Exit> {
     let mut pending: Vec<Key> = Vec::new();
-    let mut title = PathBuf::new();
     let mut dirty = true;
     loop {
         if dirty {
             // Hold the frame briefly so fast reads land in it instead of flashing an empty column.
             // A benchmark waits for everything, so it measures a complete frame.
             app.receive(if bench.is_some() { None } else { Some(LOAD_GRACE) });
-            if title != app.cwd {
-                title.clone_from(&app.cwd);
-                queue!(term.backend_mut(), SetTitle(format!("lazi: {}", ui::header(&title))))?;
-            }
+            // Every frame, since programs lazi hands the terminal to may have changed it.
+            queue!(term.backend_mut(), SetTitle(format!("lazi: {}", ui::header(&app.cwd))))?;
             draw(term, app)?;
             dirty = false;
             if let Some(start) = bench {
@@ -96,10 +94,11 @@ fn run(term: &mut DefaultTerminal, app: &mut App, bench: Option<Instant>) -> io:
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     app.error = None;
+                    app.info = None;
                     dirty = true;
                     let key = normalize(key);
                     if app.prompt.is_some() {
-                        prompt_key(app, key);
+                        prompt_key(term, app, key)?;
                         continue;
                     }
                     if app.menu.is_some() {
@@ -166,6 +165,29 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: Action) -> io::Resul
         Action::Remove(permanently) => app.remove(permanently),
         Action::Create => app.start_create(),
         Action::Rename => app.start_rename(),
+        Action::Find(backward) => app.start_find(backward),
+        Action::FindNext(backward) => app.find_next(backward),
+        Action::Filter => app.start_filter(),
+        Action::Shell(block) => app.start_shell(block),
+        Action::Cd => app.start_cd(),
+        Action::Run(script) => {
+            let cmd = Cmd { desc: script, script, arg0: OsStr::new("sh"), args: &[], block: true, pause: false };
+            run_cmd(term, app, &cmd)?;
+        }
+        Action::Jump(script) => {
+            if let Some(out) = open::capture(term, script, &app.cwd)? {
+                app.reveal(Path::new(&out));
+            }
+        }
+        Action::CopyPath(part) => app.copy_path(part),
+        Action::Suspend => {
+            open::suspend(term)?;
+            // Raw mode turned off the terminal's own ^Z handling, so stop ourselves; the shell's
+            // `fg` resumes here.
+            // SAFETY: raising a signal on ourselves has no memory-safety preconditions.
+            unsafe { libc::raise(libc::SIGTSTP) };
+            open::resume(term)?;
+        }
     }
     Ok(None)
 }
@@ -200,20 +222,44 @@ fn menu_key(term: &mut DefaultTerminal, app: &mut App, key: Key) -> io::Result<(
 }
 
 /// Keys while a prompt is open: y/n for a confirmation, text editing for the rest.
-fn prompt_key(app: &mut App, key: Key) {
+fn prompt_key(term: &mut DefaultTerminal, app: &mut App, key: Key) -> io::Result<()> {
     match (&mut app.prompt, key.0) {
         (Some(Prompt::Confirm { .. }), KeyCode::Char('y' | 'Y')) => app.submit(),
-        (Some(Prompt::Confirm { .. }), _) | (_, KeyCode::Esc) => app.prompt = None,
+        (Some(Prompt::Confirm { .. }), _) | (_, KeyCode::Esc) => app.cancel_prompt(),
+        (Some(Prompt::Shell { .. }), KeyCode::Enter) => {
+            if let Some(Prompt::Shell { input, block }) = app.prompt.take()
+                && !input.text.is_empty()
+            {
+                run_shell(term, app, &input.text, block)?;
+            }
+        }
         (_, KeyCode::Enter) => app.submit(),
-        (Some(Prompt::Create(input) | Prompt::Rename { input, .. }), _) => {
-            input.key(key);
+        (Some(prompt), _) => {
+            if prompt.input_mut().is_some_and(|input| input.key(key)) {
+                app.prompt_changed();
+            }
         }
         (None, _) => {}
     }
+    Ok(())
+}
+
+/// Runs a typed command with `$0` as the hovered file and `$@` as the targets, like yazi.
+fn run_shell(term: &mut DefaultTerminal, app: &mut App, script: &str, block: bool) -> io::Result<()> {
+    let hovered = app.hovered().map_or_else(|| "sh".into(), |(path, _)| path.into_os_string());
+    let targets = app.targets();
+    let cmd = Cmd { desc: "shell", script, arg0: &hovered, args: &targets, block, pause: block };
+    run_cmd(term, app, &cmd)
 }
 
 fn run_opener(term: &mut DefaultTerminal, app: &mut App, opener: &Opener, files: &[PathBuf]) -> io::Result<()> {
-    app.error = open::run(term, opener, files, &app.cwd)?;
+    let cmd = Cmd { desc: opener.desc, script: opener.run, arg0: OsStr::new("sh"), args: files, block: opener.block, pause: false };
+    run_cmd(term, app, &cmd)
+}
+
+fn run_cmd(term: &mut DefaultTerminal, app: &mut App, cmd: &Cmd) -> io::Result<()> {
+    let on_fail = app.on_fail();
+    app.error = open::run(term, cmd, &app.cwd, on_fail)?;
     // A blocking program (an editor, a shell) may have changed what's on disk.
     app.refresh();
     Ok(())

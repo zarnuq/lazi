@@ -1,7 +1,9 @@
-//! Choosing and running openers.
+//! Choosing and running external programs.
 
+use std::ffi::OsStr;
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io::{self, BufRead, Read, Seek, Write};
+use std::os::fd::FromRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -12,7 +14,7 @@ use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 
-use crate::config::Opener;
+use crate::config::CLIPBOARD;
 
 #[derive(Clone, Copy)]
 pub enum Kind {
@@ -56,41 +58,117 @@ fn looks_like_text(path: &Path) -> bool {
     !head[..n].contains(&0)
 }
 
-/// Runs `opener` on `files` from `cwd`. Returns an error message for the status line, if any.
-pub fn run(term: &mut DefaultTerminal, opener: &Opener, files: &[PathBuf], cwd: &Path) -> io::Result<Option<String>> {
-    // Same calling convention as yazi: the files are "$@" to the snippet.
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c").arg(opener.run).arg("sh").args(files).current_dir(cwd);
+/// A `sh -c` snippet to run.
+pub struct Cmd<'a> {
+    /// Names the command in error messages.
+    pub desc: &'a str,
+    pub script: &'a str,
+    /// `$0` for the script.
+    pub arg0: &'a OsStr,
+    /// `$@` for the script.
+    pub args: &'a [PathBuf],
+    /// Hand the terminal over and wait, instead of detaching.
+    pub block: bool,
+    /// After a blocking command, wait for Enter so its output can be read.
+    pub pause: bool,
+}
 
-    if opener.block {
+/// Runs `cmd` from `cwd`. A blocking command's failure is returned for the status line; a
+/// detached one's is passed to `on_fail` if and when it happens.
+pub fn run(
+    term: &mut DefaultTerminal,
+    cmd: &Cmd,
+    cwd: &Path,
+    on_fail: Box<dyn FnOnce(String) + Send>,
+) -> io::Result<Option<String>> {
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(cmd.script).arg(cmd.arg0).args(cmd.args).current_dir(cwd);
+
+    if cmd.block {
         suspend(term)?;
-        let status = cmd.status();
+        let status = command.status();
+        if cmd.pause {
+            let what = status.as_ref().map_or_else(|e| e.to_string(), |s| s.to_string());
+            print!("\n[{what}] press Enter to continue");
+            io::stdout().flush()?;
+            io::stdin().lock().read_line(&mut String::new())?;
+        }
         resume(term)?;
         return Ok(match status {
             Ok(s) if s.success() => None,
-            Ok(s) => Some(format!("{}: {s}", opener.desc)),
-            Err(e) => Some(format!("{}: {e}", opener.desc)),
+            Ok(s) => Some(format!("{}: {s}", cmd.desc)),
+            Err(e) => Some(format!("{}: {e}", cmd.desc)),
         });
     }
 
-    // Detached: own process group so it outlives lazi, and a thread to reap it when it exits.
-    let child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0).spawn();
-    Ok(match child {
-        Ok(mut child) => {
-            thread::spawn(move || child.wait());
-            None
+    // Detached: own process group so it outlives lazi. Stderr goes to an anonymous in-memory
+    // file rather than a pipe, so nothing blocks on a full pipe or dies of SIGPIPE once lazi
+    // exits; it's read back only if the command fails.
+    let log = stderr_log();
+    let stderr = match &log {
+        Some(log) => Stdio::from(log.try_clone()?),
+        None => Stdio::null(),
+    };
+    let child = command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr).process_group(0).spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(e) => return Ok(Some(format!("{}: {e}", cmd.desc))),
+    };
+    let desc = cmd.desc.to_owned();
+    thread::spawn(move || {
+        let Ok(status) = child.wait() else { return };
+        if status.success() {
+            return;
         }
-        Err(e) => Some(format!("{}: {e}", opener.desc)),
-    })
+        let mut text = String::new();
+        if let Some(mut log) = log {
+            let _ = log.rewind().and_then(|()| log.read_to_string(&mut text));
+        }
+        let last = text.lines().rev().find(|l| !l.trim().is_empty()).map(str::trim);
+        on_fail(format!("{desc}: {}", last.map_or_else(|| status.to_string(), str::to_owned)));
+    });
+    Ok(None)
+}
+
+fn stderr_log() -> Option<File> {
+    // SAFETY: memfd_create takes a NUL-terminated name; a non-negative return is a fresh fd we own.
+    let fd = unsafe { libc::memfd_create(c"lazi-stderr".as_ptr(), libc::MFD_CLOEXEC) };
+    (fd >= 0).then(|| unsafe { File::from_raw_fd(fd) })
+}
+
+/// Runs a picker like fzf with the terminal handed over, returning what it printed.
+/// None if it was cancelled or printed nothing.
+pub fn capture(term: &mut DefaultTerminal, script: &str, cwd: &Path) -> io::Result<Option<String>> {
+    suspend(term)?;
+    // output() would give it an empty stdin, which fzf reads as its (empty) list of choices.
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .current_dir(cwd)
+        .stdin(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .output();
+    resume(term)?;
+    let out = out?;
+    let text = String::from_utf8_lossy(&out.stdout).trim_end_matches('\n').to_owned();
+    Ok((out.status.success() && !text.is_empty()).then_some(text))
+}
+
+pub fn clipboard(text: &str) -> io::Result<()> {
+    let (prog, args) = CLIPBOARD.split_first().expect("CLIPBOARD names a command");
+    let mut child = Command::new(prog).args(args).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    child.stdin.take().expect("stdin is piped").write_all(text.as_bytes())?;
+    let status = child.wait()?;
+    if status.success() { Ok(()) } else { Err(io::Error::other(format!("{prog}: {status}"))) }
 }
 
 /// Hands the terminal back to a foreground program.
-fn suspend(term: &mut DefaultTerminal) -> io::Result<()> {
+pub fn suspend(term: &mut DefaultTerminal) -> io::Result<()> {
     execute!(term.backend_mut(), LeaveAlternateScreen, Show)?;
     disable_raw_mode()
 }
 
-fn resume(term: &mut DefaultTerminal) -> io::Result<()> {
+pub fn resume(term: &mut DefaultTerminal) -> io::Result<()> {
     enable_raw_mode()?;
     execute!(term.backend_mut(), EnterAlternateScreen, Hide)?;
     // Whatever the program left on screen is unknown, so the next frame redraws everything.

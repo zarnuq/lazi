@@ -9,6 +9,8 @@ use ratatui::style::{Color, Modifier, Style};
 use crate::open::Kind;
 
 pub const SHOW_HIDDEN: bool = true;
+/// Reads text for `cc` and friends on stdin.
+pub const CLIPBOARD: &[&str] = &["wl-copy"];
 pub const SCROLLOFF: usize = 5;
 /// Ask before trashing. Permanent deletes always ask.
 pub const CONFIRM_TRASH: bool = true;
@@ -23,6 +25,8 @@ pub const LOAD_POLL: Duration = Duration::from_millis(5);
 pub const TASK_POLL: Duration = Duration::from_millis(100);
 /// Minimum gap between progress reports from a file operation.
 pub const PROGRESS_EVERY: Duration = Duration::from_millis(50);
+/// How long to keep an eye out for a detached program failing right after it starts.
+pub const FAIL_WATCH: Duration = Duration::from_secs(3);
 /// Cached listings beyond this are dropped, except the ones on screen.
 pub const CACHE_MAX: usize = 256;
 
@@ -32,6 +36,7 @@ pub const LINK: Style = Style::new().fg(Color::Cyan);
 pub const CURSOR: Style = Style::new().add_modifier(Modifier::REVERSED);
 pub const ERROR: Style = Style::new().fg(Color::Red);
 pub const DIM: Style = Style::new().add_modifier(Modifier::DIM);
+pub const FIND: Style = Style::new().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED);
 /// The bar left of a marked entry.
 pub const MARK_SELECTED: Style = Style::new().bg(Color::Yellow);
 pub const MARK_COPIED: Style = Style::new().bg(Color::Green);
@@ -75,6 +80,31 @@ pub enum Action {
     /// Create a file, or a directory if the name ends in `/`.
     Create,
     Rename,
+    /// Incremental find; `true` searches upwards.
+    Find(bool),
+    /// Jump to the next find match; `true` for the previous one.
+    FindNext(bool),
+    /// Narrow the listing to names matching as you type.
+    Filter,
+    /// Prompt for a shell command; `true` hands it the terminal and waits.
+    Shell(bool),
+    /// Run a fixed command with the terminal handed over.
+    Run(&'static str),
+    /// Prompt for a directory to go to.
+    Cd,
+    /// Run a picker (fzf, zoxide) and go to what it prints.
+    Jump(&'static str),
+    CopyPath(Part),
+    Suspend,
+}
+
+/// Which part of the targets' paths to copy.
+#[derive(Clone, Copy)]
+pub enum Part {
+    Path,
+    Dir,
+    Name,
+    Stem,
 }
 
 pub struct Opener {
@@ -178,6 +208,22 @@ pub const KEYMAP: &[(&[Key], Action)] = &[
     (&[key('D')], Action::Remove(true)),
     (&[key('a')], Action::Create),
     (&[key('r')], Action::Rename),
+    (&[key('/')], Action::Find(false)),
+    (&[key('?')], Action::Find(true)),
+    (&[key('n')], Action::FindNext(false)),
+    (&[key('N')], Action::FindNext(true)),
+    (&[key('f')], Action::Filter),
+    (&[key(';')], Action::Shell(false)),
+    (&[key(':')], Action::Shell(true)),
+    (&[key('!')], Action::Run("pwsh")),
+    (&[key('s')], Action::Cd),
+    (&[key('z')], Action::Jump("fzf")),
+    (&[key('Z')], Action::Jump("zoxide query -i")),
+    (&[key('c'), key('c')], Action::CopyPath(Part::Path)),
+    (&[key('c'), key('d')], Action::CopyPath(Part::Dir)),
+    (&[key('c'), key('f')], Action::CopyPath(Part::Name)),
+    (&[key('c'), key('n')], Action::CopyPath(Part::Stem)),
+    (&[ctrl('z')], Action::Suspend),
 ];
 
 pub enum Lookup {

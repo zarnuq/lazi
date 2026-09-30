@@ -2,6 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::time::SystemTime;
 use std::{fs, io, path::Path};
 
+#[derive(Clone)]
 pub struct Entry {
     pub name: OsString,
     key: String,
@@ -34,6 +35,28 @@ impl Listing {
 
     pub fn position(&self, name: &OsStr) -> Option<usize> {
         self.entries.iter().position(|e| e.name == name)
+    }
+}
+
+/// Smart-case substring match: case-sensitive only if the query has an uppercase letter.
+pub struct Matcher {
+    query: String,
+    sensitive: bool,
+}
+
+impl Matcher {
+    pub fn new(query: &str) -> Self {
+        let sensitive = query.chars().any(char::is_uppercase);
+        let query = if sensitive { query.to_owned() } else { query.to_lowercase() };
+        Self { query, sensitive }
+    }
+
+    pub fn matches(&self, entry: &Entry) -> bool {
+        if self.sensitive {
+            entry.name.to_string_lossy().contains(&self.query)
+        } else {
+            entry.key.contains(&self.query)
+        }
     }
 }
 

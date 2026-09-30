@@ -7,9 +7,12 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::{CACHE_MAX, CONFIRM_TRASH, LOAD_POLL, Opener, PROGRESS_EVERY, SCROLLOFF, SHOW_HIDDEN, TASK_POLL};
-use crate::fs::{Entry, Listing};
+use crate::config::{
+    CACHE_MAX, CONFIRM_TRASH, FAIL_WATCH, LOAD_POLL, Opener, PROGRESS_EVERY, Part, SCROLLOFF, SHOW_HIDDEN, TASK_POLL,
+};
+use crate::fs::{Entry, Listing, Matcher};
 use crate::input::Input;
+use crate::open;
 use crate::ops::{Op, Progress};
 
 /// What worker threads send back.
@@ -18,6 +21,8 @@ pub enum Msg {
     Progress(u64, Progress),
     /// A task finished, with one message per failed item.
     Done(u64, Vec<String>),
+    /// A detached program failed.
+    Failed(String),
 }
 
 /// The `O` popup: every opener for the targeted files.
@@ -32,6 +37,31 @@ pub enum Prompt {
     Create(Input),
     Rename { from: PathBuf, input: Input },
     Confirm { question: String, op: Op },
+    /// Incremental find; `origin` is where the cursor goes back to if cancelled.
+    Find { input: Input, backward: bool, origin: usize },
+    Filter(Input),
+    Shell { input: Input, block: bool },
+    Cd(Input),
+}
+
+impl Prompt {
+    pub fn input_mut(&mut self) -> Option<&mut Input> {
+        match self {
+            Prompt::Create(input)
+            | Prompt::Rename { input, .. }
+            | Prompt::Find { input, .. }
+            | Prompt::Filter(input)
+            | Prompt::Shell { input, .. }
+            | Prompt::Cd(input) => Some(input),
+            Prompt::Confirm { .. } => None,
+        }
+    }
+}
+
+/// The cwd narrowed to names matching `query`.
+pub struct Filter {
+    pub query: String,
+    entries: Vec<Entry>,
 }
 
 pub struct Yank {
@@ -59,6 +89,12 @@ pub struct App {
     pub height: usize,
     /// Shown in the status line until the next key.
     pub error: Option<String>,
+    pub info: Option<String>,
+    pub filter: Option<Filter>,
+    /// The find query, kept after the prompt closes for `n`/`N`.
+    pub find: Option<String>,
+    /// Until when a detached program's early failure is worth waking up for.
+    watch_until: Option<Instant>,
     pub menu: Option<Menu>,
     pub prompt: Option<Prompt>,
     pub selected: BTreeSet<PathBuf>,
@@ -86,6 +122,10 @@ impl App {
             offset: 0,
             height: 0,
             error: None,
+            info: None,
+            filter: None,
+            find: None,
+            watch_until: None,
             menu: None,
             prompt: None,
             selected: BTreeSet::new(),
@@ -114,8 +154,12 @@ impl App {
         self.cache.get(dir)
     }
 
+    /// The cwd's entries as shown, i.e. after any filter.
     pub fn entries(&self) -> &[Entry] {
-        self.listing(&self.cwd).map_or(&[], |l| &l.entries)
+        match &self.filter {
+            Some(filter) => &filter.entries,
+            None => self.listing(&self.cwd).map_or(&[], |l| &l.entries),
+        }
     }
 
     pub fn hovered_in(&self, dir: &Path) -> Option<&OsStr> {
@@ -146,7 +190,7 @@ impl App {
     pub fn poll_timeout(&self) -> Option<Duration> {
         if self.is_loading() {
             Some(LOAD_POLL)
-        } else if !self.tasks.is_empty() {
+        } else if !self.tasks.is_empty() || self.watch_until.is_some_and(|t| Instant::now() < t) {
             Some(TASK_POLL)
         } else {
             None
@@ -209,7 +253,7 @@ impl App {
     pub fn goto(&mut self, dir: &str) {
         let dir = match (dir.strip_prefix('~'), env::var_os("HOME")) {
             (Some(rest), Some(home)) => PathBuf::from(home).join(rest.trim_start_matches('/')),
-            _ => PathBuf::from(dir),
+            _ => self.cwd.join(dir),
         };
         if dir.is_dir() {
             self.cd(dir);
@@ -279,12 +323,17 @@ impl App {
         }
     }
 
-    /// Leaves visual mode keeping its selection, or clears the selection.
+    /// Undoes one thing, in order: visual mode (keeping its selection), the selection, the
+    /// filter, the find highlight.
     pub fn escape(&mut self) {
         if self.visual.is_some() {
             self.commit_visual();
-        } else {
+        } else if !self.selected.is_empty() {
             self.selected.clear();
+        } else if self.filter.is_some() {
+            self.set_filter("");
+        } else {
+            self.find = None;
         }
     }
 
@@ -369,8 +418,147 @@ impl App {
                 self.selected.clear();
                 self.start(op);
             }
-            None => {}
+            Some(Prompt::Cd(input)) => self.goto(&input.text),
+            // Find and filter already happened as the text was typed; they just stay.
+            Some(Prompt::Find { .. } | Prompt::Filter(_)) => {}
+            // Shell commands need the terminal, so main runs them.
+            Some(Prompt::Shell { .. }) | None => {}
         }
+    }
+
+    /// Closes the prompt, undoing a find or filter in progress.
+    pub fn cancel_prompt(&mut self) {
+        match self.prompt.take() {
+            Some(Prompt::Find { origin, .. }) => {
+                self.find = None;
+                self.move_to(origin);
+            }
+            Some(Prompt::Filter(_)) => self.set_filter(""),
+            _ => {}
+        }
+    }
+
+    /// Updates a live find or filter after its text changed.
+    pub fn prompt_changed(&mut self) {
+        match &self.prompt {
+            Some(Prompt::Find { input, backward, origin }) => {
+                let (query, backward, origin) = (input.text.clone(), *backward, *origin);
+                self.find = (!query.is_empty()).then_some(query);
+                self.cursor = origin;
+                if self.find.is_some() {
+                    self.find_next(backward);
+                } else {
+                    self.move_to(origin);
+                }
+            }
+            Some(Prompt::Filter(input)) => {
+                let query = input.text.clone();
+                self.set_filter(&query);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn start_find(&mut self, backward: bool) {
+        let input = Input::new(String::new(), 0);
+        self.prompt = Some(Prompt::Find { input, backward, origin: self.cursor });
+    }
+
+    /// Jumps to the next entry matching the find query, wrapping around.
+    pub fn find_next(&mut self, backward: bool) {
+        let Some(query) = &self.find else { return };
+        let matcher = Matcher::new(query);
+        let entries = self.entries();
+        let (len, from) = (entries.len(), self.cursor);
+        // Everything after the cursor in order, ending with the cursor itself.
+        let found = (1..=len)
+            .map(|k| if backward { (from + len - k % len) % len } else { (from + k) % len })
+            .find(|&i| matcher.matches(&entries[i]));
+        if let Some(i) = found {
+            self.move_to(i);
+        }
+    }
+
+    pub fn find_matcher(&self) -> Option<Matcher> {
+        self.find.as_deref().map(Matcher::new)
+    }
+
+    pub fn start_filter(&mut self) {
+        let query = self.filter.as_ref().map_or_else(String::new, |f| f.query.clone());
+        let cursor = query.len();
+        self.prompt = Some(Prompt::Filter(Input::new(query, cursor)));
+    }
+
+    fn set_filter(&mut self, query: &str) {
+        self.filter = (!query.is_empty()).then(|| Filter { query: query.to_owned(), entries: Vec::new() });
+        self.apply_filter();
+        self.sync_cursor();
+        self.refresh();
+    }
+
+    /// Recomputes the filtered entries from the cwd listing.
+    fn apply_filter(&mut self) {
+        let Some(filter) = &mut self.filter else { return };
+        let matcher = Matcher::new(&filter.query);
+        let all = self.cache.get(&self.cwd).map_or(&[][..], |l| &l.entries);
+        filter.entries = all.iter().filter(|e| matcher.matches(e)).cloned().collect();
+    }
+
+    pub fn start_shell(&mut self, block: bool) {
+        self.prompt = Some(Prompt::Shell { input: Input::new(String::new(), 0), block });
+    }
+
+    pub fn start_cd(&mut self) {
+        self.prompt = Some(Prompt::Cd(Input::new(String::new(), 0)));
+    }
+
+    /// Goes to `path` (relative to the cwd) if it's a directory, or to its parent with it hovered.
+    pub fn reveal(&mut self, path: &Path) {
+        let path = self.cwd.join(path);
+        if path.is_dir() {
+            self.cd(path);
+            return;
+        }
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else { return };
+        self.hovered.insert(parent.to_path_buf(), name.to_owned());
+        if parent == self.cwd {
+            self.sync_cursor();
+            self.refresh();
+        } else {
+            self.cd(parent.to_path_buf());
+        }
+    }
+
+    pub fn copy_path(&mut self, part: Part) {
+        let targets = self.targets();
+        let parts: Vec<_> = targets
+            .iter()
+            .map(|path| {
+                let part = match part {
+                    Part::Path => Some(path.as_os_str()),
+                    Part::Dir => path.parent().map(Path::as_os_str),
+                    Part::Name => path.file_name(),
+                    Part::Stem => path.file_stem(),
+                };
+                part.unwrap_or_default().to_string_lossy()
+            })
+            .collect();
+        let text = parts.join("\n");
+        match open::clipboard(&text) {
+            Ok(()) if parts.len() == 1 => self.info = Some(format!("copied {text}")),
+            Ok(()) => self.info = Some(format!("copied {} paths", parts.len())),
+            Err(e) => self.error = Some(format!("copy: {e}")),
+        }
+    }
+
+    /// A callback for a detached program to report failure through, which also keeps the
+    /// main loop checking in for a little while.
+    pub fn on_fail(&mut self) -> Box<dyn FnOnce(String) + Send> {
+        self.watch_until = Some(Instant::now() + FAIL_WATCH);
+        let tx = self.tx.clone();
+        Box::new(move |msg| {
+            let _ = tx.send(Msg::Failed(msg));
+        })
     }
 
     /// Takes messages from worker threads, waiting up to `grace` (forever if None) while
@@ -392,6 +580,7 @@ impl App {
                     let is_cwd = dir == self.cwd;
                     self.cache.insert(dir, listing);
                     if is_cwd {
+                        self.apply_filter();
                         self.sync_cursor();
                     }
                     // May start new reads, e.g. the preview once the cwd has arrived.
@@ -410,6 +599,7 @@ impl App {
                     }
                     self.refresh();
                 }
+                Msg::Failed(msg) => self.error = Some(msg),
             }
         }
         got
@@ -502,6 +692,8 @@ impl App {
     }
 
     fn after_cd(&mut self) {
+        self.filter = None;
+        self.find = None;
         self.cursor = 0;
         self.offset = 0;
         self.sync_cursor();
@@ -510,11 +702,15 @@ impl App {
 
     /// Puts the cursor back on the remembered name in the cwd, or clamps it if that name is gone.
     fn sync_cursor(&mut self) {
-        let Some(listing) = self.cache.get(&self.cwd) else { return };
-        match self.hovered.get(&self.cwd).and_then(|name| listing.position(name)) {
+        if !self.cache.contains_key(&self.cwd) {
+            return;
+        }
+        let entries = self.entries();
+        let found = self.hovered.get(&self.cwd).and_then(|name| entries.iter().position(|e| &e.name == name));
+        match found {
             Some(i) => self.cursor = i,
             None => {
-                self.cursor = self.cursor.min(listing.entries.len().saturating_sub(1));
+                self.cursor = self.cursor.min(entries.len().saturating_sub(1));
                 self.remember();
             }
         }
