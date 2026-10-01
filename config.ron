@@ -50,20 +50,21 @@
     // kitty draws an icon followed by a space across both cells. An icon is "glyph", or ("glyph", "colour") with a colour as in `style`; without
     // one it takes the name's colour. A directory gets its entry in `dirs`, else `dir`; a file
     // its entry in `files` (exact names), else in `exts` (lowercase), else `link` or `file`.
-    // `icons: None` draws names alone. Every glyph is from Nerd Fonts' Material Design set, so
-    // they share one size and style; mixing sets gives icons of visibly different sizes.
+    // `icons: None` draws names alone. Nerd Fonts' icon sets are drawn at different sizes:
+    // directories use yazi's glyphs, which are larger, and files Material Design's, which share
+    // one size.
     icons: (
-        dir: "󰉋",
+        dir: "",
         link: "󱅷",
         file: "󰈔",
         dirs: {
-            ".config": "󱁿",
-            ".git": "󰊢",
-            "Documents": "󱧶",
-            "Downloads": "󰉍",
-            "Music": "󱍙",
-            "Pictures": "󰉏",
-            "Videos": "󱧺",
+            ".config": "",
+            ".git": "",
+            "Documents": "",
+            "Downloads": "",
+            "Music": "",
+            "Pictures": "",
+            "Videos": "",
         },
         files: {
             ".gitignore": ("󰊢", "#fab387"),

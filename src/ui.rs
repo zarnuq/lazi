@@ -259,6 +259,12 @@ fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, fi
                 icon.fg.map_or(base, |fg| base.fg(fg))
             };
             buf.set_stringn(x, y, &icon.glyph, width, icon_style);
+            // The gap is an en space, not a space: kitty draws an icon across a following space
+            // or en space, but ratatui never sends a space to a cell it thinks is blank already,
+            // which after a clear leaves an empty cell and some icons drawn narrow. An en space
+            // is always sent, so every icon gets the same two cells.
+            let gap = x + icon.width;
+            buf.set_stringn(gap, y, "\u{2002}", width.saturating_sub(icon.width as usize), icon_style);
             let used = (icon.width as usize + 1).min(width);
             x += used as u16;
             width -= used;
