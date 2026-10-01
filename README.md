@@ -4,18 +4,6 @@ A small, fast terminal file manager in the style of [yazi](https://github.com/sx
 and ranger: three columns (parent, current, preview), vim keys, and image previews over
 kitty's graphics protocol. It is configured by editing `src/config.rs` and rebuilding.
 
-- **Previews** — text with syntax highlighting (bat's grammar set), images decoded in
-  process, video thumbnails, and command output for audio, PDFs and archives. Built on a
-  worker thread that only works on the file you stop on.
-- **Live** — inotify watches the visible directories, so outside changes show without a
-  keypress. An idle lazi sleeps in `poll(2)` and makes no wakeups.
-- **File operations** — select, yank/cut/paste with progress, trash (freedesktop.org
-  spec), permanent delete, create, rename.
-- **Find and filter** — incremental smart-case find with Tab completion, and a live
-  filter that narrows the listing.
-- **Openers** — per file kind, with an open-with menu.
-- **cd on quit** — writes where you left off for a shell wrapper to `cd` into.
-
 Linux only (inotify, eventfd, memfd).
 
 ## Install
@@ -48,6 +36,77 @@ l() {
 ```
 
 `--bench` prints the time to the first complete frame and exits.
+
+## Configuration
+
+Everything lives in [`src/config.rs`](src/config.rs): the keymap, colours, column ratio,
+syntax theme, which previewer and which openers each file kind gets, and the clipboard
+command. Edit and rebuild.
+
+The defaults call out to these, all optional; lazi works without them and reports what's
+missing when you use it:
+
+| Tool | For |
+| --- | --- |
+| a kitty-graphics terminal (kitty, ghostty, wezterm) | image previews |
+| `ffmpeg` | video thumbnails, images the `image` crate can't decode |
+| `exiftool` | audio and PDF metadata previews |
+| `bsdtar` (libarchive) | archive listings, "Extract here" |
+| `file` | previews of everything else |
+| `wl-copy` (wl-clipboard) | `cc` and friends |
+| `fzf` | `z` |
+| `gio` (glib) | trashing files on another filesystem |
+| `$EDITOR` (else `nvim`), `xdg-open`, `swayimg`, `zathura`, `mpv`, `mediainfo` | openers |
+
+## Features
+
+**Navigation**
+- Three columns: parent, current directory, preview (widths in a 2:5:8 ratio).
+- Vim keys and arrows, half and full pages, `gg`/`G`, multi-key bindings.
+- Back/forward history; remembers the entry you were on in every directory visited.
+- Bookmarked directories (`gh` `gc` `gd`) and an fzf jump.
+- Hidden-file toggle. Listings sort directories first, then names ignoring case.
+- The cursor stays 5 rows from the edge when scrolling.
+
+**Previews**
+- Text with syntax highlighting from bat's grammars, picked by extension, then file
+  name, then first line. The first screen shows in about 3ms and the rest follows.
+- ANSI colours in files and command output are kept; tabs are expanded. `J`/`K` scroll.
+- Images decoded in process and shown with kitty's graphics protocol. Formats the image
+  crate can't read (avif, heic, jxl) go through ffmpeg.
+- Video gets an ffmpeg thumbnail; audio and PDFs exiftool metadata; archives a bsdtar
+  listing; everything else `file -b`.
+- Only the file you stop on is previewed. Preview commands are killed after 3s, and a
+  decoder panic shows as a note instead of a crash.
+
+**File operations**
+- Select, select all, invert selection.
+- Yank/cut and paste with progress. A name clash gets a `_1`-style suffix, or `P`
+  overwrites.
+- Trash per the freedesktop.org spec (`gio` for other filesystems); permanent delete.
+- Create a file, or a directory if the name ends in `/`. Rename.
+- Actions apply to the selection if there is one, else the hovered entry. Selected, yanked
+  and cut entries are marked.
+
+**Find and filter**
+- Incremental find in either direction with `n`/`N` and highlighted matches. Smart case:
+  case-sensitive only if the query has an uppercase letter.
+- Shell-style Tab completion in find, which moves into directories.
+- A live filter that narrows the listing as you type.
+
+**Opening**
+- Openers per file kind: `o` runs the first, `O` offers them all.
+- Openers either take over the terminal or run detached; a detached one's error is shown
+  if it fails.
+- Copy the path, directory, file name or name without extension to the clipboard.
+
+**System**
+- inotify picks up outside changes without a keypress.
+- No wakeups at all when idle.
+- Synchronized updates, so no half-drawn frames; the terminal title shows the cwd.
+- `--cwd-file` for cd-on-quit (`Q` skips it); `^z` suspends.
+- `--bench` measures time to the first frame.
+- Configured at compile time in `src/config.rs`.
 
 ## Keys
 
@@ -82,24 +141,3 @@ l() {
 | `q` / `Q` | Quit / quit without writing the cwd file |
 
 Actions act on the selection if there is one, else on the hovered entry.
-
-## Configuration
-
-Everything lives in [`src/config.rs`](src/config.rs): the keymap, colours, column ratio,
-syntax theme, which previewer and which openers each file kind gets, and the clipboard
-command. Edit and rebuild.
-
-The defaults call out to these, all optional; lazi works without them and reports what's
-missing when you use it:
-
-| Tool | For |
-| --- | --- |
-| a kitty-graphics terminal (kitty, ghostty, wezterm) | image previews |
-| `ffmpeg` | video thumbnails, images the `image` crate can't decode |
-| `exiftool` | audio and PDF metadata previews |
-| `bsdtar` (libarchive) | archive listings, "Extract here" |
-| `file` | previews of everything else |
-| `wl-copy` (wl-clipboard) | `cc` and friends |
-| `fzf` | `z` |
-| `gio` (glib) | trashing files on another filesystem |
-| `$EDITOR` (else `nvim`), `xdg-open`, `swayimg`, `zathura`, `mpv`, `mediainfo` | openers |
