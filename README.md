@@ -108,7 +108,8 @@ what's missing when you use it:
 **Find and filter**
 - Incremental find in either direction with `n`/`N` and highlighted matches. Smart case:
   case-sensitive only if the query has an uppercase letter.
-- Shell-style Tab completion in find, which moves into directories.
+- Shell-style Tab completion in find, which moves into directories. Shift+Tab steps
+  through the matches without closing the prompt.
 - A live filter that narrows the listing as you type.
 
 **Opening**
@@ -149,7 +150,7 @@ These are the bindings in the example `config.ron`.
 | `d` / `D` | Trash / delete permanently |
 | `a` | Create a file, or a directory if the name ends in `/` |
 | `r` | Rename |
-| `/` `?` | Find forward / backward; `Tab` completes and moves into directories |
+| `/` `?` | Find forward / backward; `Tab` completes and moves into directories, `S-Tab` steps through matches |
 | `n` `N` | Next / previous match |
 | `f` | Filter the listing |
 | `Esc` | Clear the selection, else the filter, else the find highlight |

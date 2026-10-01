@@ -213,11 +213,13 @@
             "h": Cancel,
         },
         // While typing in a prompt (create, rename, find, filter). Unbound printable keys type
-        // themselves. Complete is Tab completion in find, which moves into directories.
+        // themselves. Complete is Tab completion in find, which moves into directories;
+        // NextMatch and PrevMatch step through find's matches without closing the prompt.
         prompt: {
             "Enter": Submit,
             "Esc": Cancel,
             "Tab": Complete,
+            "Shift+Tab": NextMatch,
             "Left": Left,
             "Right": Right,
             "Home": Home,

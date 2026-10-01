@@ -60,7 +60,11 @@ impl Input {
             }
             PromptAction::Left => self.cursor = self.prev().unwrap_or(0),
             PromptAction::Right => self.cursor = self.next().unwrap_or(self.text.len()),
-            PromptAction::Submit | PromptAction::Cancel | PromptAction::Complete => return false,
+            PromptAction::Submit
+            | PromptAction::Cancel
+            | PromptAction::Complete
+            | PromptAction::NextMatch
+            | PromptAction::PrevMatch => return false,
         }
         true
     }

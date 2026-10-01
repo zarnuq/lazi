@@ -288,6 +288,8 @@ fn prompt_key(app: &mut App, key: Key) {
         Some(PromptAction::Submit) => return app.submit(),
         Some(PromptAction::Cancel) => return app.cancel_prompt(),
         Some(PromptAction::Complete) => return app.find_complete(),
+        Some(PromptAction::NextMatch) => return app.cycle_match(false),
+        Some(PromptAction::PrevMatch) => return app.cycle_match(true),
         Some(edit) => prompt.input_mut().is_some_and(|input| input.edit(edit)),
         None => match key {
             (KeyCode::Char(c), mods) if !mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) => {

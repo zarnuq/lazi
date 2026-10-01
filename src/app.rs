@@ -562,6 +562,14 @@ impl App {
         self.prompt = Some(Prompt::Find { input, backward, origin: self.cursor });
     }
 
+    /// Steps to the next match while the find prompt stays open; `reverse` goes against the
+    /// find's direction.
+    pub fn cycle_match(&mut self, reverse: bool) {
+        if let Some(Prompt::Find { backward, .. }) = self.prompt {
+            self.find_next(backward != reverse);
+        }
+    }
+
     fn set_find_query(&mut self, query: String) {
         if let Some(Prompt::Find { input, .. }) = &mut self.prompt {
             input.set(query);

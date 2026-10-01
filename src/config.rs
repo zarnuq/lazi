@@ -211,6 +211,9 @@ pub enum PromptAction {
     Cancel,
     /// Tab completion in the find prompt.
     Complete,
+    /// Move to the next find match without leaving the prompt, in the find's direction.
+    NextMatch,
+    PrevMatch,
     Left,
     Right,
     Home,
@@ -378,7 +381,12 @@ fn sequence(name: &str) -> Result<Vec<Key>, String> {
             };
         }
         if let Some(code) = named(key) {
-            keys.push((code, modifiers));
+            // Terminals send shift+Tab as BackTab.
+            if code == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT) {
+                keys.push((KeyCode::BackTab, modifiers - KeyModifiers::SHIFT));
+            } else {
+                keys.push((code, modifiers));
+            }
             continue;
         }
         let mut chars = key.chars();
