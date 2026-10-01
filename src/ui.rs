@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsStr;
 use std::path::Path;
 
 use ratatui::Frame;
@@ -8,7 +9,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block, Clear, Paragraph, Widget, Wrap};
 
 use crate::app::{App, Mark, Menu, Prompt};
-use crate::config;
+use crate::config::{self, Icon, Icons};
 use crate::fs::{Entry, Listing, Matcher};
 use crate::input::Input;
 use crate::preview::Preview;
@@ -158,6 +159,19 @@ fn draw_menu(buf: &mut Buffer, area: Rect, menu: &Menu) {
     }
 }
 
+fn icon<'a>(icons: &'a Icons, entry: &Entry) -> &'a Icon {
+    let name = entry.name.to_str().unwrap_or_default();
+    if entry.is_dir {
+        return icons.dirs.get(name).unwrap_or(&icons.dir);
+    }
+    let ext = || Path::new(name).extension().and_then(OsStr::to_str).map(str::to_ascii_lowercase);
+    icons
+        .files
+        .get(name)
+        .or_else(|| icons.exts.get(&ext()?))
+        .unwrap_or(if entry.is_link { &icons.link } else { &icons.file })
+}
+
 /// The end of `text` if it's wider than `width`, since errors put the cause last.
 fn tail(text: &str, width: usize) -> String {
     let len = text.chars().count();
@@ -217,21 +231,39 @@ fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, fi
     }
     let rows = list.entries.iter().enumerate().skip(list.offset).take(area.height as usize);
     for (y, (i, entry)) in (area.y..).zip(rows) {
-        let mut style = if entry.is_dir {
+        let base = if entry.is_dir {
             config::get().style.dir
         } else if entry.is_link {
             config::get().style.link
         } else {
             Style::new()
         };
+        let mut style = base;
         if find.is_some_and(|m| m.matches(entry)) {
             style = style.patch(config::get().style.find);
         }
-        if Some(i) == list.cursor {
+        let on_cursor = Some(i) == list.cursor;
+        if on_cursor {
             buf.set_style(Rect { y, height: 1, ..area }, config::get().style.cursor);
             style = style.patch(config::get().style.cursor);
         }
-        buf.set_stringn(area.x + 1, y, entry.name.to_string_lossy(), width, style);
+        let (mut x, mut width) = (area.x + 1, width);
+        if let Some(icon) = config::get().icons.as_ref().map(|icons| icon(icons, entry))
+            && !icon.glyph.is_empty()
+        {
+            // Not underlined with a find match, and on the cursor row plain cursor colours:
+            // the icon's own colour there would turn into a block of it under reverse video.
+            let icon_style = if on_cursor {
+                base.patch(config::get().style.cursor)
+            } else {
+                icon.fg.map_or(base, |fg| base.fg(fg))
+            };
+            buf.set_stringn(x, y, &icon.glyph, width, icon_style);
+            let used = (icon.width as usize + 1).min(width);
+            x += used as u16;
+            width -= used;
+        }
+        buf.set_stringn(x, y, entry.name.to_string_lossy(), width, style);
         if let Some(mark) = app.mark(dir, entry)
             && let Some(cell) = buf.cell_mut((area.x, y))
         {

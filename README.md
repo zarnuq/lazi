@@ -52,6 +52,8 @@ The file is [RON](https://github.com/ron-rs/ron). It covers:
 - options: hidden files, column ratio, scrolloff, syntax theme, tab size, preview timeout,
   the clipboard and cross-filesystem trash commands;
 - styles for every coloured element;
+- icons (Nerd Font glyphs, optionally coloured) by directory name, file name or extension,
+  or none at all;
 - named openers (shell snippets, blocking or detached);
 - ordered rules matching directories, extensions or text files to a chain of previewers and
   a list of openers;
@@ -83,6 +85,7 @@ what's missing when you use it:
 - Back/forward history; remembers the entry you were on in every directory visited.
 - Bookmarked directories (`gh` `gc` `gd`) and an fzf jump.
 - Hidden-file toggle. Listings sort directories first, then names ignoring case.
+- Optional file icons, picked by name or extension, never by reading the file.
 - The cursor stays 5 rows from the edge when scrolling.
 
 **Previews**

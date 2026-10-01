@@ -9,6 +9,7 @@ use std::{env, fs};
 
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
 use ron::extensions::Extensions;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -33,6 +34,8 @@ pub struct Config {
     /// Trashes a path given as the last argument, for files on another filesystem.
     pub trash_fallback: Vec<String>,
     pub style: Styles,
+    /// None draws names alone.
+    pub icons: Option<Icons>,
     pub openers: HashMap<String, Opener>,
     pub rules: Vec<Rule>,
     pub keys: Keys,
@@ -62,6 +65,54 @@ pub struct Styles {
     pub mark_copied: Style,
     #[serde(deserialize_with = "style")]
     pub mark_cut: Style,
+}
+
+/// Glyphs drawn before names, e.g. from a Nerd Font. A directory gets its entry in `dirs`, else
+/// `dir`; a file its entry in `files`, else in `exts`, else `link` or `file`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Icons {
+    pub dir: Icon,
+    pub link: Icon,
+    pub file: Icon,
+    pub dirs: HashMap<String, Icon>,
+    pub files: HashMap<String, Icon>,
+    /// Keyed by lowercase extension.
+    pub exts: HashMap<String, Icon>,
+}
+
+#[derive(Deserialize)]
+#[serde(try_from = "IconSpec")]
+pub struct Icon {
+    pub glyph: String,
+    /// In cells, for where the name starts.
+    pub width: u16,
+    /// None takes the name's colour.
+    pub fg: Option<Color>,
+}
+
+/// "glyph", or ("glyph", "colour").
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum IconSpec {
+    Plain(String),
+    Coloured(String, String),
+}
+
+impl TryFrom<IconSpec> for Icon {
+    type Error = String;
+
+    fn try_from(spec: IconSpec) -> Result<Self, String> {
+        let (glyph, fg) = match spec {
+            IconSpec::Plain(glyph) => (glyph, None),
+            IconSpec::Coloured(glyph, fg) => {
+                let colour = fg.parse::<Color>().map_err(|_| format!("unknown colour \"{fg}\""))?;
+                (glyph, Some(colour))
+            }
+        };
+        let width = Span::raw(&glyph).width() as u16;
+        Ok(Self { glyph, width, fg })
+    }
 }
 
 #[derive(Clone, Deserialize)]
