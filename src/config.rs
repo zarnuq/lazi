@@ -1,54 +1,136 @@
-//! Compile-time configuration. Edit and rebuild.
+//! The configuration, read once at startup from a RON file. Nothing has a built-in default: the
+//! file is the whole truth, and a missing or invalid one stops lazi before it takes the screen.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
+use std::{env, fs};
 
-use ratatui::crossterm::event::KeyCode::{self, Down, Esc, Left, PageDown, PageUp, Right, Up};
-use ratatui::crossterm::event::KeyModifiers;
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::style::{Color, Modifier, Style};
+use ron::extensions::Extensions;
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer};
 
-use crate::open::Kind;
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    pub show_hidden: bool,
+    /// Width ratio of the parent, current and preview columns.
+    pub ratio: (u16, u16, u16),
+    pub scrolloff: usize,
+    /// Ask before trashing. Permanent deletes always ask.
+    pub confirm_trash: bool,
+    pub syntax_theme: String,
+    pub tab_size: usize,
+    /// Largest image size (pixels) sent to the terminal, whatever the preview area.
+    pub image_max: (u32, u32),
+    #[serde(deserialize_with = "seconds")]
+    pub preview_timeout: Duration,
+    /// Reads text on stdin; empty disables copying.
+    pub clipboard: Vec<String>,
+    /// Trashes a path given as the last argument, for files on another filesystem.
+    pub trash_fallback: Vec<String>,
+    pub style: Styles,
+    pub openers: HashMap<String, Opener>,
+    pub rules: Vec<Rule>,
+    pub keys: Keys,
+}
 
-pub const SHOW_HIDDEN: bool = true;
-/// Colours for code previews: one of syntect's bundled themes, i.e. base16-ocean.dark,
-/// base16-eighties.dark, base16-mocha.dark, base16-ocean.light, InspiredGitHub,
-/// Solarized (dark) or Solarized (light).
-pub const SYNTAX_THEME: &str = "base16-ocean.dark";
-/// Columns per tab stop in text previews.
-pub const TAB_SIZE: usize = 5;
-/// Largest image size (pixels) sent to the terminal, whatever the preview area.
-pub const IMAGE_MAX: (u32, u32) = (2500, 1500);
-/// Preview commands running longer than this are killed.
-pub const PREVIEW_TIMEOUT: Duration = Duration::from_secs(3);
-/// Reads text for `cc` and friends on stdin.
-pub const CLIPBOARD: &[&str] = &["wl-copy"];
-pub const SCROLLOFF: usize = 5;
-/// Ask before trashing. Permanent deletes always ask.
-pub const CONFIRM_TRASH: bool = true;
-/// Width ratio of the parent, current and preview columns.
-pub const RATIO: [u16; 3] = [2, 5, 8];
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Styles {
+    #[serde(deserialize_with = "style")]
+    pub header: Style,
+    #[serde(deserialize_with = "style")]
+    pub dir: Style,
+    #[serde(deserialize_with = "style")]
+    pub link: Style,
+    #[serde(deserialize_with = "style")]
+    pub cursor: Style,
+    #[serde(deserialize_with = "style")]
+    pub error: Style,
+    #[serde(deserialize_with = "style")]
+    pub dim: Style,
+    #[serde(deserialize_with = "style")]
+    pub find: Style,
+    /// The bar left of a marked entry.
+    #[serde(deserialize_with = "style")]
+    pub mark_selected: Style,
+    #[serde(deserialize_with = "style")]
+    pub mark_copied: Style,
+    #[serde(deserialize_with = "style")]
+    pub mark_cut: Style,
+}
 
-/// How long a frame waits for directory reads before drawing without them.
-pub const LOAD_GRACE: Duration = Duration::from_millis(10);
-/// Minimum gap between progress reports from a file operation.
-pub const PROGRESS_EVERY: Duration = Duration::from_millis(50);
-/// Cached listings beyond this are dropped, except the ones on screen.
-pub const CACHE_MAX: usize = 256;
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Opener {
+    pub desc: String,
+    /// A `sh -c` snippet; the files are "$@".
+    pub run: String,
+    /// Hand the terminal over and wait, instead of detaching.
+    #[serde(default)]
+    pub block: bool,
+}
 
-pub const HEADER: Style = Style::new().fg(Color::Green).add_modifier(Modifier::BOLD);
-pub const DIR: Style = Style::new().fg(Color::Blue).add_modifier(Modifier::BOLD);
-pub const LINK: Style = Style::new().fg(Color::Cyan);
-pub const CURSOR: Style = Style::new().add_modifier(Modifier::REVERSED);
-pub const ERROR: Style = Style::new().fg(Color::Red);
-pub const DIM: Style = Style::new().add_modifier(Modifier::DIM);
-pub const FIND: Style = Style::new().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED);
-/// The bar left of a marked entry.
-pub const MARK_SELECTED: Style = Style::new().bg(Color::Yellow);
-pub const MARK_COPIED: Style = Style::new().bg(Color::Green);
-pub const MARK_CUT: Style = Style::new().bg(Color::Red);
+/// Which files get which previewers and openers. Rules are tried in order and the first match
+/// wins. Directories only match rules with `dir: true`, and files only rules without it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rule {
+    #[serde(default)]
+    pub dir: bool,
+    /// Lowercase extensions; empty matches any.
+    #[serde(default)]
+    pub ext: Vec<String>,
+    /// Only files with no NUL in their first KB.
+    #[serde(default)]
+    pub text: bool,
+    /// Tried in order until one works.
+    #[serde(default)]
+    pub preview: Vec<Previewer>,
+    /// Names from `openers`; `Open` runs the first.
+    #[serde(default)]
+    open: Vec<String>,
+    #[serde(skip)]
+    pub openers: Vec<Opener>,
+}
 
-#[derive(Clone, Copy)]
+/// How a file is previewed. Scripts get the file as "$1" and the area as $COLUMNS/$LINES.
+#[derive(Deserialize)]
+pub enum Previewer {
+    /// The file's own text.
+    Text,
+    /// Decoded in process and shown with kitty's graphics protocol.
+    Image,
+    /// A script printing an image (e.g. PNG) to stdout.
+    ImageCmd(String),
+    /// A script whose output is shown as text; ANSI colours are kept.
+    Cmd(String),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Keys {
+    #[serde(deserialize_with = "sequences")]
+    pub normal: Vec<(Vec<Key>, Action)>,
+    /// While the `O` menu is up.
+    #[serde(deserialize_with = "singles")]
+    pub menu: HashMap<Key, MenuAction>,
+    /// While a text prompt is open. Unbound printable keys type themselves.
+    #[serde(deserialize_with = "singles")]
+    pub prompt: HashMap<Key, PromptAction>,
+    /// Answers yes to a confirmation; any other key is no.
+    pub confirm: Confirm,
+}
+
+#[derive(Deserialize)]
 pub enum Action {
     Quit,
+    /// Quit without writing the cwd file, so the shell stays where it was.
+    QuitNoCwd,
     Move(isize),
     /// Move by a percentage of the visible rows.
     Page(isize),
@@ -60,69 +142,52 @@ pub enum Action {
     Forward,
     ToggleHidden,
     /// Go to a directory; a leading `~` is $HOME.
-    Goto(&'static str),
+    Goto(String),
+    /// Run the first opener for the targets.
     Open,
-    /// Pick from all the openers for the hovered file.
+    /// Pick from all the openers for the targets.
     OpenWith,
-    /// Quit without writing the cwd file, so the shell stays where it was.
-    QuitNoCwd,
     /// Toggle the hovered entry's selection and move down.
     ToggleSelect,
     SelectAll,
     InvertSelection,
     /// Clear the selection, else the filter, else the find highlight.
     Escape,
-    /// Yank the targets; `true` cuts.
-    Yank(bool),
+    Yank,
+    Cut,
     Unyank,
-    /// Paste the yanked files here; `true` overwrites instead of renaming.
-    Paste(bool),
-    /// Trash the targets; `true` deletes permanently.
-    Remove(bool),
+    /// Paste the yanked files here, renaming on a clash.
+    Paste,
+    PasteOverwrite,
+    Trash,
+    /// Delete permanently.
+    Delete,
     /// Create a file, or a directory if the name ends in `/`.
     Create,
     Rename,
-    /// Incremental find; `true` searches upwards.
-    Find(bool),
-    /// Jump to the next find match; `true` for the previous one.
-    FindNext(bool),
+    Find,
+    FindBack,
+    FindNext,
+    FindPrev,
     /// Narrow the listing to names matching as you type.
     Filter,
-    /// Run a picker (fzf) and go to what it prints.
-    Jump(&'static str),
     CopyPath(Part),
     Suspend,
     /// Scroll the file preview by this many lines.
     Seek(isize),
-}
-
-/// How a file is previewed. Scripts get the file as "$1" and the area as $COLUMNS/$LINES.
-pub enum Previewer {
-    /// The file's own text.
-    Text,
-    /// Decoded and shown with kitty's graphics protocol.
-    Image,
-    /// A script printing an image (e.g. PNG) to stdout.
-    ImageCmd(&'static str),
-    /// A script whose output is shown as text; ANSI colours are kept.
-    Cmd(&'static str),
-}
-
-pub fn previewer(kind: Kind) -> Previewer {
-    match kind {
-        Kind::Text => Previewer::Text,
-        Kind::Image => Previewer::Image,
-        // A representative frame from the first couple of seconds, rather than a black first one.
-        Kind::Video => Previewer::ImageCmd(r#"ffmpeg -v error -i "$1" -vf thumbnail=50 -frames:v 1 -f image2pipe -c:v png -"#),
-        // Metadata only, without exiftool's own and the filesystem's.
-        Kind::Audio | Kind::Pdf => Previewer::Cmd(r#"exiftool -S --File:all --ExifTool:all "$1""#),
-        Kind::Archive => Previewer::Cmd(r#"bsdtar -tf "$1""#),
-        Kind::Dir | Kind::Other => Previewer::Cmd(r#"file -b "$1""#),
-    }
+    /// A `sh -c` snippet with the targets as "$@". `block` hands it the terminal; `reveal` also
+    /// does, and then goes to the path it prints (as with fzf).
+    Run {
+        run: String,
+        #[serde(default)]
+        block: bool,
+        #[serde(default)]
+        reveal: bool,
+    },
 }
 
 /// Which part of the targets' paths to copy.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Deserialize)]
 pub enum Part {
     Path,
     Dir,
@@ -130,122 +195,240 @@ pub enum Part {
     Stem,
 }
 
-pub struct Opener {
-    pub desc: &'static str,
-    /// A `sh -c` snippet; the files are "$@".
-    pub run: &'static str,
-    /// Hand the terminal over and wait, instead of detaching.
-    pub block: bool,
+#[derive(Deserialize)]
+pub enum MenuAction {
+    Down,
+    Up,
+    Accept,
+    /// Run the nth opener, counting from 1.
+    Pick(usize),
+    Cancel,
 }
 
-const fn block(desc: &'static str, run: &'static str) -> Opener {
-    Opener { desc, run, block: true }
-}
-const fn detach(desc: &'static str, run: &'static str) -> Opener {
-    Opener { desc, run, block: false }
+#[derive(Deserialize)]
+pub enum PromptAction {
+    Submit,
+    Cancel,
+    /// Tab completion in the find prompt.
+    Complete,
+    Left,
+    Right,
+    Home,
+    End,
+    Backspace,
+    Delete,
+    /// Delete back to the previous space or slash.
+    DeleteWord,
+    KillToStart,
+    KillToEnd,
 }
 
-const SHELL: Opener = block("Shell here", r#"cd "$1" && exec "$SHELL""#);
-const EDIT: Opener = block("$EDITOR", r#"${EDITOR:-nvim} "$@""#);
-const OPEN: Opener = detach("Open", r#"xdg-open "$1""#);
-const REVEAL: Opener = detach("Reveal", r#"xdg-open "$(dirname "$1")""#);
-const VIEW: Opener = detach("View", r#"swayimg "$1""#);
-const SETBG: Opener = detach("Set wallpaper", r#"qs ipc call wallpaper set "$1""#);
-const READ: Opener = detach("Read", r#"zathura "$1""#);
-const PLAY: Opener = detach("Play", r#"mpv --force-window "$@""#);
-const MEDIAINFO: Opener = block("Media info", r#"mediainfo "$1"; echo "Press enter to exit"; read _"#);
-const EXTRACT: Opener = detach("Extract here", r#"for f; do bsdtar -xf "$f"; done"#);
+#[derive(Deserialize)]
+#[serde(try_from = "Vec<String>")]
+pub struct Confirm {
+    /// The first key as written, for the question's "(y/N)".
+    pub hint: String,
+    pub keys: Vec<Key>,
+}
 
-/// `o` runs the first opener; `O` offers them all.
-pub fn openers(kind: Kind) -> &'static [Opener] {
-    match kind {
-        Kind::Dir => &[SHELL, EDIT, REVEAL],
-        Kind::Image => &[VIEW, SETBG, OPEN, REVEAL],
-        Kind::Pdf => &[READ, OPEN, REVEAL],
-        Kind::Video | Kind::Audio => &[PLAY, MEDIAINFO, REVEAL],
-        Kind::Archive => &[EXTRACT, OPEN, REVEAL],
-        Kind::Text => &[EDIT, REVEAL],
-        Kind::Other => &[OPEN, REVEAL],
+impl TryFrom<Vec<String>> for Confirm {
+    type Error = String;
+
+    fn try_from(names: Vec<String>) -> Result<Self, String> {
+        let hint = names.first().ok_or("confirm needs at least one key")?.clone();
+        let keys = names.iter().map(|name| single(name)).collect::<Result<_, _>>()?;
+        Ok(Self { hint, keys })
     }
+}
+
+static CONFIG: OnceLock<Config> = OnceLock::new();
+
+pub fn get() -> &'static Config {
+    CONFIG.get().expect("config::load runs first thing in main")
+}
+
+/// Reads `path`, or else the first of $XDG_CONFIG_HOME/lazi/config.ron and
+/// $XDG_CONFIG_DIRS/lazi/config.ron that exists.
+pub fn load(path: Option<PathBuf>) -> Result<(), String> {
+    let path = match path {
+        Some(path) => path,
+        None => find()?,
+    };
+    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    // So `fg: "blue"` needn't be `fg: Some("blue")`.
+    let ron = ron::Options::default().with_default_extension(Extensions::IMPLICIT_SOME);
+    let mut config: Config = ron.from_str(&text).map_err(|e| format!("{}:{e}", path.display()))?;
+    for rule in &mut config.rules {
+        for name in &rule.open {
+            let opener = config.openers.get(name).ok_or_else(|| format!("{}: no opener named \"{name}\"", path.display()))?;
+            rule.openers.push(opener.clone());
+        }
+    }
+    let _ = CONFIG.set(config);
+    Ok(())
+}
+
+fn find() -> Result<PathBuf, String> {
+    let home = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".config"));
+    let dirs = env::var("XDG_CONFIG_DIRS").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| "/etc/xdg".into());
+    let candidates: Vec<PathBuf> =
+        [home].into_iter().chain(dirs.split(':').map(PathBuf::from)).map(|dir| dir.join("lazi/config.ron")).collect();
+    candidates.iter().find(|path| path.is_file()).cloned().ok_or_else(|| {
+        let tried: Vec<_> = candidates.iter().map(|p| p.display().to_string()).collect();
+        format!("no config file; tried {}. lazi's source has an example config.ron.", tried.join(", "))
+    })
+}
+
+fn seconds<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+    Duration::try_from_secs_f64(f64::deserialize(d)?).map_err(D::Error::custom)
+}
+
+/// Unset colours and attributes are left to the terminal.
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct StyleSpec {
+    /// A name ("blue", "lightred"), "#rrggbb" or a 256-colour index ("208").
+    fg: Option<String>,
+    bg: Option<String>,
+    bold: bool,
+    dim: bool,
+    italic: bool,
+    underlined: bool,
+    reversed: bool,
+}
+
+fn style<'de, D: Deserializer<'de>>(d: D) -> Result<Style, D::Error> {
+    let spec = StyleSpec::deserialize(d)?;
+    let color = |name: &str| name.parse::<Color>().map_err(|_| D::Error::custom(format!("unknown colour \"{name}\"")));
+    let mut style = Style::new();
+    if let Some(fg) = &spec.fg {
+        style = style.fg(color(fg)?);
+    }
+    if let Some(bg) = &spec.bg {
+        style = style.bg(color(bg)?);
+    }
+    for (on, modifier) in [
+        (spec.bold, Modifier::BOLD),
+        (spec.dim, Modifier::DIM),
+        (spec.italic, Modifier::ITALIC),
+        (spec.underlined, Modifier::UNDERLINED),
+        (spec.reversed, Modifier::REVERSED),
+    ] {
+        if on {
+            style = style.add_modifier(modifier);
+        }
+    }
+    Ok(style)
 }
 
 pub type Key = (KeyCode, KeyModifiers);
 
-const fn key(c: char) -> Key {
-    (KeyCode::Char(c), KeyModifiers::NONE)
-}
-const fn ctrl(c: char) -> Key {
-    (KeyCode::Char(c), KeyModifiers::CONTROL)
-}
-const fn code(c: KeyCode) -> Key {
-    (c, KeyModifiers::NONE)
-}
-const fn shift(c: KeyCode) -> Key {
-    (c, KeyModifiers::SHIFT)
+/// A keymap whose bindings may be sequences. A binding that starts a longer one would make the
+/// longer one unreachable, so that's an error rather than a surprise.
+fn sequences<'de, D: Deserializer<'de>, A: Deserialize<'de>>(d: D) -> Result<Vec<(Vec<Key>, A)>, D::Error> {
+    let raw = HashMap::<String, A>::deserialize(d)?;
+    let mut map = Vec::new();
+    for (name, action) in raw {
+        map.push((sequence(&name).map_err(D::Error::custom)?, action, name));
+    }
+    for (keys, _, name) in &map {
+        if let Some((_, _, other)) = map.iter().find(|(k, _, n)| n != name && k.starts_with(keys)) {
+            return Err(D::Error::custom(format!("\"{name}\" hides \"{other}\"")));
+        }
+    }
+    Ok(map.into_iter().map(|(keys, action, _)| (keys, action)).collect())
 }
 
-pub const KEYMAP: &[(&[Key], Action)] = &[
-    (&[key('q')], Action::Quit),
-    (&[key('Q')], Action::QuitNoCwd),
-    (&[ctrl('c')], Action::Quit),
-    (&[key('k')], Action::Move(-1)),
-    (&[key('j')], Action::Move(1)),
-    (&[code(Up)], Action::Move(-1)),
-    (&[code(Down)], Action::Move(1)),
-    (&[ctrl('u')], Action::Page(-50)),
-    (&[ctrl('d')], Action::Page(50)),
-    (&[ctrl('b')], Action::Page(-100)),
-    (&[ctrl('f')], Action::Page(100)),
-    (&[shift(PageUp)], Action::Page(-50)),
-    (&[shift(PageDown)], Action::Page(50)),
-    (&[code(PageUp)], Action::Page(-100)),
-    (&[code(PageDown)], Action::Page(100)),
-    (&[key('g'), key('g')], Action::Top),
-    (&[key('G')], Action::Bottom),
-    (&[key('h')], Action::Leave),
-    (&[key('l')], Action::Enter),
-    (&[code(Left)], Action::Leave),
-    (&[code(Right)], Action::Enter),
-    (&[key('H')], Action::Back),
-    (&[key('L')], Action::Forward),
-    (&[key('.')], Action::ToggleHidden),
-    (&[key('g'), key('h')], Action::Goto("~")),
-    (&[key('g'), key('c')], Action::Goto("~/.config")),
-    (&[key('g'), key('d')], Action::Goto("~/Downloads")),
-    (&[key('o')], Action::Open),
-    (&[code(KeyCode::Enter)], Action::Open),
-    (&[key('O')], Action::OpenWith),
-    (&[key(' ')], Action::ToggleSelect),
-    (&[ctrl('a')], Action::SelectAll),
-    (&[ctrl('r')], Action::InvertSelection),
-    (&[code(Esc)], Action::Escape),
-    (&[key('y')], Action::Yank(false)),
-    (&[key('x')], Action::Yank(true)),
-    (&[key('Y')], Action::Unyank),
-    (&[key('X')], Action::Unyank),
-    (&[key('p')], Action::Paste(false)),
-    (&[key('P')], Action::Paste(true)),
-    (&[key('d')], Action::Remove(false)),
-    (&[key('D')], Action::Remove(true)),
-    (&[key('a')], Action::Create),
-    (&[key('r')], Action::Rename),
-    (&[key('/')], Action::Find(false)),
-    (&[key('?')], Action::Find(true)),
-    (&[key('n')], Action::FindNext(false)),
-    (&[key('N')], Action::FindNext(true)),
-    (&[key('f')], Action::Filter),
-    (&[key('z')], Action::Jump("fzf")),
-    (&[key('c'), key('c')], Action::CopyPath(Part::Path)),
-    (&[key('c'), key('d')], Action::CopyPath(Part::Dir)),
-    (&[key('c'), key('f')], Action::CopyPath(Part::Name)),
-    (&[key('c'), key('n')], Action::CopyPath(Part::Stem)),
-    (&[ctrl('z')], Action::Suspend),
-    (&[key('K')], Action::Seek(-5)),
-    (&[key('J')], Action::Seek(5)),
-];
+fn singles<'de, D: Deserializer<'de>, A: Deserialize<'de>>(d: D) -> Result<HashMap<Key, A>, D::Error> {
+    let raw = HashMap::<String, A>::deserialize(d)?;
+    raw.into_iter().map(|(name, action)| Ok((single(&name).map_err(D::Error::custom)?, action))).collect()
+}
+
+fn single(name: &str) -> Result<Key, String> {
+    match sequence(name)?.as_slice() {
+        &[key] => Ok(key),
+        _ => Err(format!("\"{name}\": only single keys here")),
+    }
+}
+
+/// Parses a binding: keys separated by spaces, each a key name or character with optional
+/// `+`-joined modifiers ("Ctrl+u", "Shift+PageUp", "Ctrl+x Ctrl+s"). A run of plain characters
+/// that isn't a key name is one key per character, so "gg" is "g g".
+fn sequence(name: &str) -> Result<Vec<Key>, String> {
+    let mut keys = Vec::new();
+    for word in name.split_whitespace() {
+        // The last `+` separates the key, unless the key is `+` itself.
+        let (mods, key) = match word.strip_suffix("++") {
+            Some(mods) => (Some(mods), "+"),
+            None => match word.rsplit_once('+') {
+                Some((mods, key)) if !mods.is_empty() && !key.is_empty() => (Some(mods), key),
+                _ => (None, word),
+            },
+        };
+        let mut modifiers = KeyModifiers::NONE;
+        for m in mods.into_iter().flat_map(|m| m.split('+')) {
+            modifiers |= match m.to_ascii_lowercase().as_str() {
+                "ctrl" | "control" => KeyModifiers::CONTROL,
+                "alt" | "meta" => KeyModifiers::ALT,
+                "shift" => KeyModifiers::SHIFT,
+                "super" => KeyModifiers::SUPER,
+                _ => return Err(format!("\"{name}\": unknown modifier \"{m}\"")),
+            };
+        }
+        if let Some(code) = named(key) {
+            keys.push((code, modifiers));
+            continue;
+        }
+        let mut chars = key.chars();
+        if let (Some(c), None) = (chars.next(), chars.next()) {
+            keys.push(char_key(c, modifiers));
+        } else if mods.is_none() {
+            keys.extend(key.chars().map(|c| char_key(c, modifiers)));
+        } else {
+            return Err(format!("\"{name}\": unknown key \"{key}\""));
+        }
+    }
+    if keys.is_empty() {
+        return Err("empty key binding".into());
+    }
+    Ok(keys)
+}
+
+/// Terminals send a shifted character as itself ('G'), so that's how it's bound too.
+fn char_key(c: char, mut modifiers: KeyModifiers) -> Key {
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        modifiers.remove(KeyModifiers::SHIFT);
+        return (KeyCode::Char(c.to_ascii_uppercase()), modifiers);
+    }
+    (KeyCode::Char(c), modifiers)
+}
+
+fn named(name: &str) -> Option<KeyCode> {
+    Some(match name {
+        "Enter" => KeyCode::Enter,
+        "Esc" => KeyCode::Esc,
+        "Tab" => KeyCode::Tab,
+        "BackTab" => KeyCode::BackTab,
+        "Backspace" => KeyCode::Backspace,
+        "Delete" => KeyCode::Delete,
+        "Insert" => KeyCode::Insert,
+        "Home" => KeyCode::Home,
+        "End" => KeyCode::End,
+        "PageUp" => KeyCode::PageUp,
+        "PageDown" => KeyCode::PageDown,
+        "Up" => KeyCode::Up,
+        "Down" => KeyCode::Down,
+        "Left" => KeyCode::Left,
+        "Right" => KeyCode::Right,
+        "Space" => KeyCode::Char(' '),
+        _ => KeyCode::F(name.strip_prefix('F')?.parse().ok().filter(|n| (1..=24).contains(n))?),
+    })
+}
 
 pub enum Lookup {
-    Action(Action),
+    Action(&'static Action),
     /// `keys` starts a longer binding; wait for the next key.
     Pending,
     Unbound,
@@ -253,9 +436,9 @@ pub enum Lookup {
 
 pub fn lookup(keys: &[Key]) -> Lookup {
     let mut prefix = false;
-    for (bound, action) in KEYMAP {
+    for (bound, action) in &get().keys.normal {
         if *bound == keys {
-            return Lookup::Action(*action);
+            return Lookup::Action(action);
         }
         prefix |= bound.starts_with(keys);
     }

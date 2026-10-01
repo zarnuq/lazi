@@ -17,7 +17,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use std::{env, io};
+use std::{env, io, process};
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -25,8 +25,11 @@ use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdat
 use ratatui::crossterm::{execute, queue};
 
 use app::{App, Menu, Prompt};
-use config::{Action, Key, LOAD_GRACE, Lookup, Opener};
+use config::{Action, Key, Lookup, MenuAction, Opener, PromptAction};
 use open::Cmd;
+
+/// How long a frame waits for directory reads before drawing without them.
+const LOAD_GRACE: Duration = Duration::from_millis(10);
 
 enum Exit {
     Quit,
@@ -39,6 +42,7 @@ fn main() -> io::Result<()> {
     let start = Instant::now();
     let mut bench = false;
     let mut cwd_file = None;
+    let mut config = None;
     let mut dir = None;
     let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
@@ -48,9 +52,17 @@ fn main() -> io::Result<()> {
             cwd_file = args.next().map(PathBuf::from);
         } else if let Some(path) = arg.as_bytes().strip_prefix(b"--cwd-file=") {
             cwd_file = Some(PathBuf::from(OsStr::from_bytes(path)));
+        } else if arg == "--config" {
+            config = args.next().map(PathBuf::from);
+        } else if let Some(path) = arg.as_bytes().strip_prefix(b"--config=") {
+            config = Some(PathBuf::from(OsStr::from_bytes(path)));
         } else {
             dir = Some(PathBuf::from(arg));
         }
+    }
+    if let Err(e) = config::load(config) {
+        eprintln!("lazi: {e}");
+        process::exit(1);
     }
     let cwd = match dir {
         Some(dir) => dir.canonicalize()?,
@@ -162,12 +174,12 @@ fn handle(term: &mut DefaultTerminal, app: &mut App, pending: &mut Vec<Key>, eve
     }
 }
 
-fn apply(term: &mut DefaultTerminal, app: &mut App, action: Action) -> io::Result<Option<Exit>> {
+fn apply(term: &mut DefaultTerminal, app: &mut App, action: &Action) -> io::Result<Option<Exit>> {
     match action {
         Action::Quit => return Ok(Some(Exit::Quit)),
         Action::QuitNoCwd => return Ok(Some(Exit::QuitNoCwd)),
-        Action::Move(delta) => app.move_by(delta),
-        Action::Page(percent) => app.page(percent),
+        Action::Move(delta) => app.move_by(*delta),
+        Action::Page(percent) => app.page(*percent),
         Action::Top => app.move_to(0),
         Action::Bottom => app.move_to(usize::MAX),
         Action::Leave => app.leave(),
@@ -179,9 +191,11 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: Action) -> io::Resul
         Action::Open | Action::OpenWith => {
             let files = app.targets();
             if let Some(first) = files.first() {
-                // The first target decides the kind, like yazi.
-                let openers = config::openers(open::kind(first, first.is_dir()));
-                if let Action::Open = action {
+                // The first target decides the rule, like yazi.
+                let openers = open::rule(first, first.is_dir()).map_or(&[][..], |rule| &rule.openers);
+                if openers.is_empty() {
+                    app.error = Some(format!("no opener for {}", first.display()));
+                } else if let Action::Open = action {
                     run_opener(term, app, &openers[0], &files)?;
                 } else {
                     app.menu = Some(Menu { openers, files, cursor: 0 });
@@ -192,23 +206,33 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: Action) -> io::Resul
         Action::SelectAll => app.select_all(false),
         Action::InvertSelection => app.select_all(true),
         Action::Escape => app.escape(),
-        Action::Yank(cut) => app.yank(cut),
+        Action::Yank => app.yank(false),
+        Action::Cut => app.yank(true),
         Action::Unyank => app.unyank(),
-        Action::Paste(force) => app.paste(force),
-        Action::Remove(permanently) => app.remove(permanently),
+        Action::Paste => app.paste(false),
+        Action::PasteOverwrite => app.paste(true),
+        Action::Trash => app.remove(false),
+        Action::Delete => app.remove(true),
         Action::Create => app.start_create(),
         Action::Rename => app.start_rename(),
-        Action::Find(backward) => app.start_find(backward),
-        Action::FindNext(backward) => app.find_next(backward),
+        Action::Find => app.start_find(false),
+        Action::FindBack => app.start_find(true),
+        Action::FindNext => app.find_next(false),
+        Action::FindPrev => app.find_next(true),
         Action::Filter => app.start_filter(),
-        Action::Jump(script) => {
-            app.kitty.clear(term.backend_mut())?;
-            if let Some(out) = open::capture(term, script, &app.cwd)? {
-                app.reveal(Path::new(&out));
+        Action::CopyPath(part) => app.copy_path(*part),
+        Action::Seek(delta) => app.seek(*delta),
+        Action::Run { run, block, reveal } => {
+            let files = app.targets();
+            if *reveal {
+                app.kitty.clear(term.backend_mut())?;
+                if let Some(out) = open::capture(term, run, &files, &app.cwd)? {
+                    app.reveal(Path::new(&out));
+                }
+            } else {
+                run_cmd(term, app, &Cmd { desc: run, script: run, args: &files, block: *block })?;
             }
         }
-        Action::CopyPath(part) => app.copy_path(part),
-        Action::Seek(delta) => app.seek(delta),
         Action::Suspend => {
             app.kitty.clear(term.backend_mut())?;
             open::suspend(term)?;
@@ -222,26 +246,26 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: Action) -> io::Resul
     Ok(None)
 }
 
-/// Keys while the `O` menu is up: j/k to move, Enter/o/l or a number to run, Esc/q/h to cancel.
+/// Keys while the `O` menu is up.
 fn menu_key(term: &mut DefaultTerminal, app: &mut App, key: Key) -> io::Result<()> {
     let Some(menu) = &mut app.menu else { return Ok(()) };
     let len = menu.openers.len();
-    let pick = match key.0 {
-        KeyCode::Char('j') | KeyCode::Down => {
+    let pick = match config::get().keys.menu.get(&key) {
+        Some(MenuAction::Down) => {
             menu.cursor = (menu.cursor + 1) % len;
             None
         }
-        KeyCode::Char('k') | KeyCode::Up => {
+        Some(MenuAction::Up) => {
             menu.cursor = (menu.cursor + len - 1) % len;
             None
         }
-        KeyCode::Enter | KeyCode::Char('o' | 'l') => Some(menu.cursor),
-        KeyCode::Char(c @ '1'..='9') => Some(c as usize - '1' as usize).filter(|&i| i < len),
-        KeyCode::Esc | KeyCode::Char('q' | 'h') => {
+        Some(MenuAction::Accept) => Some(menu.cursor),
+        Some(MenuAction::Pick(n)) => n.checked_sub(1).filter(|&i| i < len),
+        Some(MenuAction::Cancel) => {
             app.menu = None;
             None
         }
-        _ => None,
+        None => None,
     };
     if let Some(i) = pick
         && let Some(menu) = app.menu.take()
@@ -251,24 +275,34 @@ fn menu_key(term: &mut DefaultTerminal, app: &mut App, key: Key) -> io::Result<(
     Ok(())
 }
 
-/// Keys while a prompt is open: y/n for a confirmation, text editing for the rest.
+/// Keys while a prompt is open: a confirmation takes its yes keys and treats anything else as
+/// no; the rest edit text, with unbound printable keys typing themselves.
 fn prompt_key(app: &mut App, key: Key) {
-    match (&mut app.prompt, key.0) {
-        (Some(Prompt::Confirm { .. }), KeyCode::Char('y' | 'Y')) => app.submit(),
-        (Some(Prompt::Confirm { .. }), _) | (_, KeyCode::Esc) => app.cancel_prompt(),
-        (Some(Prompt::Find { .. }), KeyCode::Tab) => app.find_complete(),
-        (_, KeyCode::Enter) => app.submit(),
-        (Some(prompt), _) => {
-            if prompt.input_mut().is_some_and(|input| input.key(key)) {
-                app.prompt_changed();
+    let keys = &config::get().keys;
+    let Some(prompt) = &mut app.prompt else { return };
+    if let Prompt::Confirm { .. } = prompt {
+        if keys.confirm.keys.contains(&key) { app.submit() } else { app.cancel_prompt() }
+        return;
+    }
+    let changed = match keys.prompt.get(&key) {
+        Some(PromptAction::Submit) => return app.submit(),
+        Some(PromptAction::Cancel) => return app.cancel_prompt(),
+        Some(PromptAction::Complete) => return app.find_complete(),
+        Some(edit) => prompt.input_mut().is_some_and(|input| input.edit(edit)),
+        None => match key {
+            (KeyCode::Char(c), mods) if !mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) => {
+                prompt.input_mut().map(|input| input.insert(c)).is_some()
             }
-        }
-        (None, _) => {}
+            _ => false,
+        },
+    };
+    if changed {
+        app.prompt_changed();
     }
 }
 
 fn run_opener(term: &mut DefaultTerminal, app: &mut App, opener: &Opener, files: &[PathBuf]) -> io::Result<()> {
-    let cmd = Cmd { desc: opener.desc, script: opener.run, args: files, block: opener.block };
+    let cmd = Cmd { desc: &opener.desc, script: &opener.run, args: files, block: opener.block };
     run_cmd(term, app, &cmd)
 }
 
@@ -285,8 +319,9 @@ fn run_cmd(term: &mut DefaultTerminal, app: &mut App, cmd: &Cmd) -> io::Result<(
 
 fn normalize(key: KeyEvent) -> Key {
     let mut mods = key.modifiers;
-    // A char already says whether shift was held, so 'G' binds as 'G', not shift+'G'.
-    if let KeyCode::Char(_) = key.code {
+    // A char already says whether shift was held, so 'G' binds as 'G', not shift+'G'. BackTab
+    // likewise is already shift+Tab.
+    if let KeyCode::Char(_) | KeyCode::BackTab = key.code {
         mods.remove(KeyModifiers::SHIFT);
     }
     (key.code, mods)

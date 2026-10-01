@@ -9,9 +9,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::{
-    CACHE_MAX, CONFIRM_TRASH, Opener, PROGRESS_EVERY, Part, SCROLLOFF, SHOW_HIDDEN,
-};
+use crate::config::{self, Opener, Part};
 use crate::fs::{Entry, Listing, Matcher};
 use crate::input::Input;
 use crate::kitty::{self, Kitty};
@@ -20,6 +18,11 @@ use crate::ops::{Op, Progress};
 use crate::preview::{self, Preview, Request};
 use crate::wake::Waker;
 use crate::watch::Watcher;
+
+/// Minimum gap between progress reports from a file operation.
+const PROGRESS_EVERY: Duration = Duration::from_millis(50);
+/// Cached listings beyond this are dropped, except the ones on screen.
+const CACHE_MAX: usize = 256;
 
 /// What worker threads send back.
 pub enum Msg {
@@ -152,7 +155,7 @@ impl App {
             yank: None,
             tasks: BTreeMap::new(),
             next_task: 0,
-            show_hidden: SHOW_HIDDEN,
+            show_hidden: config::get().show_hidden,
             cache: HashMap::new(),
             loading: HashSet::new(),
             hovered: HashMap::new(),
@@ -359,10 +362,10 @@ impl App {
         self.refresh();
     }
 
-    /// Keeps the cursor at least SCROLLOFF rows from the edges of the listing.
+    /// Keeps the cursor at least `scrolloff` rows from the edges of the listing.
     pub fn scroll(&mut self) {
         let height = self.height;
-        let so = SCROLLOFF.min(height.saturating_sub(1) / 2);
+        let so = config::get().scrolloff.min(height.saturating_sub(1) / 2);
         if self.cursor < self.offset + so {
             self.offset = self.cursor.saturating_sub(so);
         } else if self.cursor + so >= self.offset + height {
@@ -442,11 +445,12 @@ impl App {
             [path] => format!("'{}'", path.file_name().unwrap_or_default().to_string_lossy()),
             paths => format!("{} items", paths.len()),
         };
+        let yes = &config::get().keys.confirm.hint;
         if permanently {
-            let question = format!("Permanently delete {what}? (y/N)");
+            let question = format!("Permanently delete {what}? ({yes}/N)");
             self.prompt = Some(Prompt::Confirm { question, op: Op::Delete(paths) });
-        } else if CONFIRM_TRASH {
-            let question = format!("Trash {what}? (y/N)");
+        } else if config::get().confirm_trash {
+            let question = format!("Trash {what}? ({yes}/N)");
             self.prompt = Some(Prompt::Confirm { question, op: Op::Trash(paths) });
         } else {
             self.selected.clear();

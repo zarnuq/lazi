@@ -13,37 +13,17 @@ use ratatui::crossterm::cursor::{Hide, Show};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
 
-use crate::config::CLIPBOARD;
+use crate::config::{self, Rule};
 
-#[derive(Clone, Copy)]
-pub enum Kind {
-    Dir,
-    Image,
-    Pdf,
-    Video,
-    Audio,
-    Archive,
-    Text,
-    Other,
-}
-
-/// Classifies by extension, falling back to sniffing the first bytes for a NUL.
-pub fn kind(path: &Path, is_dir: bool) -> Kind {
-    if is_dir {
-        return Kind::Dir;
-    }
+/// The first config rule matching `path`. The text sniff only happens if a rule asks for it.
+pub fn rule(path: &Path, is_dir: bool) -> Option<&'static Rule> {
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
-    match ext.as_deref() {
-        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "svg" | "avif" | "heic" | "ico" | "jxl") => Kind::Image,
-        Some("pdf" | "epub" | "djvu") => Kind::Pdf,
-        Some("mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" | "flv" | "wmv") => Kind::Video,
-        Some("mp3" | "flac" | "ogg" | "opus" | "wav" | "m4a" | "aac" | "wma") => Kind::Audio,
-        Some("zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "txz" | "zst" | "7z" | "rar" | "iso" | "cpio" | "lz4") => {
-            Kind::Archive
-        }
-        _ if looks_like_text(path) => Kind::Text,
-        _ => Kind::Other,
-    }
+    let mut text = None;
+    config::get().rules.iter().find(|rule| {
+        rule.dir == is_dir
+            && (rule.ext.is_empty() || ext.as_ref().is_some_and(|ext| rule.ext.contains(ext)))
+            && (!rule.text || *text.get_or_insert_with(|| looks_like_text(path)))
+    })
 }
 
 fn looks_like_text(path: &Path) -> bool {
@@ -125,14 +105,16 @@ fn stderr_log() -> Option<File> {
     (fd >= 0).then(|| unsafe { File::from_raw_fd(fd) })
 }
 
-/// Runs a picker like fzf with the terminal handed over, returning what it printed.
-/// None if it was cancelled or printed nothing.
-pub fn capture(term: &mut DefaultTerminal, script: &str, cwd: &Path) -> io::Result<Option<String>> {
+/// Runs a picker like fzf with the terminal handed over and `args` as "$@", returning what it
+/// printed. None if it was cancelled or printed nothing.
+pub fn capture(term: &mut DefaultTerminal, script: &str, args: &[PathBuf], cwd: &Path) -> io::Result<Option<String>> {
     suspend(term)?;
     // output() would give it an empty stdin, which fzf reads as its (empty) list of choices.
     let out = Command::new("sh")
         .arg("-c")
         .arg(script)
+        .arg("sh")
+        .args(args)
         .current_dir(cwd)
         .stdin(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -144,7 +126,7 @@ pub fn capture(term: &mut DefaultTerminal, script: &str, cwd: &Path) -> io::Resu
 }
 
 pub fn clipboard(text: &str) -> io::Result<()> {
-    let (prog, args) = CLIPBOARD.split_first().expect("CLIPBOARD names a command");
+    let Some((prog, args)) = config::get().clipboard.split_first() else { return Err(io::Error::other("no clipboard command")) };
     let mut child = Command::new(prog).args(args).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
     child.stdin.take().expect("stdin is piped").write_all(text.as_bytes())?;
     let status = child.wait()?;

@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::{env, mem, ptr};
 
+use crate::config;
+
 pub enum Op {
     Copy { srcs: Vec<PathBuf>, dir: PathBuf, force: bool },
     Move { srcs: Vec<PathBuf>, dir: PathBuf, force: bool },
@@ -190,7 +192,8 @@ fn remove(path: &Path) -> io::Result<()> {
 }
 
 /// Moves `path` to the home trash per the freedesktop.org trash spec. Things on another
-/// filesystem go through `gio trash`, which knows about per-mount trash directories.
+/// filesystem go through the configured fallback (e.g. `gio trash`), which knows about
+/// per-mount trash directories.
 fn trash(path: &Path) -> io::Result<()> {
     let name = path.file_name().ok_or_else(|| io::Error::other("no file name"))?;
     let trash = data_home().join("Trash");
@@ -205,7 +208,7 @@ fn trash(path: &Path) -> io::Result<()> {
         Ok(()) => Ok(()),
         Err(e) => {
             let _ = fs::remove_file(&info_path);
-            if e.kind() == ErrorKind::CrossesDevices { gio_trash(path) } else { Err(e) }
+            if e.kind() == ErrorKind::CrossesDevices { trash_fallback(path).unwrap_or(Err(e)) } else { Err(e) }
         }
     }
 }
@@ -242,13 +245,14 @@ fn reserve(files: &Path, info: &Path, name: &OsStr, original: &Path) -> io::Resu
     unreachable!()
 }
 
-fn gio_trash(path: &Path) -> io::Result<()> {
-    let out = Command::new("gio").args(["trash", "--"]).arg(path).stdin(Stdio::null()).output()?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(String::from_utf8_lossy(&out.stderr).trim().to_owned()))
-    }
+/// None if no fallback is configured.
+fn trash_fallback(path: &Path) -> Option<io::Result<()>> {
+    let (prog, args) = config::get().trash_fallback.split_first()?;
+    let out = match Command::new(prog).args(args).arg(path).stdin(Stdio::null()).output() {
+        Ok(out) => out,
+        Err(e) => return Some(Err(io::Error::new(e.kind(), format!("{prog}: {e}")))),
+    };
+    Some(if out.status.success() { Ok(()) } else { Err(io::Error::other(String::from_utf8_lossy(&out.stderr).trim().to_owned())) })
 }
 
 fn data_home() -> PathBuf {

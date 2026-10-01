@@ -8,9 +8,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block, Clear, Paragraph, Widget, Wrap};
 
 use crate::app::{App, Mark, Menu, Prompt};
-use crate::config::{
-    CURSOR, DIM, DIR, ERROR, FIND, HEADER, LINK, MARK_COPIED, MARK_CUT, MARK_SELECTED, RATIO, SCROLLOFF,
-};
+use crate::config;
 use crate::fs::{Entry, Listing, Matcher};
 use crate::input::Input;
 use crate::preview::Preview;
@@ -22,7 +20,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         return;
     }
     let buf = frame.buffer_mut();
-    buf.set_stringn(area.x, area.y, header(&app.cwd), area.width as usize, HEADER);
+    buf.set_stringn(area.x, area.y, header(&app.cwd), area.width as usize, config::get().style.header);
 
     let body = Rect { y: area.y + 1, height: area.height - 2, ..area };
     let [parent_col, cwd_col, preview_col] = columns(body);
@@ -71,7 +69,7 @@ fn draw_preview(buf: &mut Buffer, area: Rect, app: &App, preview: &Preview) {
         }
         Preview::Image(_) => {}
         Preview::Note(note) => {
-            buf.set_stringn(inner.x, inner.y, note, inner.width as usize, DIM);
+            buf.set_stringn(inner.x, inner.y, note, inner.width as usize, config::get().style.dim);
         }
     }
 }
@@ -117,7 +115,7 @@ fn draw_status(buf: &mut Buffer, area: Rect, app: &App) -> Option<(u16, u16)> {
     // Messages get whatever the right side leaves.
     let width = width.saturating_sub(right_width + 1);
     if let Some(err) = &app.error {
-        buf.set_stringn(area.x, area.y, tail(err, width), width, ERROR);
+        buf.set_stringn(area.x, area.y, tail(err, width), width, config::get().style.error);
     } else if let Some(info) = &app.info {
         buf.set_stringn(area.x, area.y, info, width, Style::new());
     } else if !app.tasks.is_empty() {
@@ -132,7 +130,7 @@ fn draw_status(buf: &mut Buffer, area: Rect, app: &App) -> Option<(u16, u16)> {
             .collect();
         buf.set_stringn(area.x, area.y, tasks.join(" · "), width, Style::new());
     } else if app.is_loading() {
-        buf.set_stringn(area.x, area.y, "loading…", width, DIM);
+        buf.set_stringn(area.x, area.y, "loading…", width, config::get().style.dim);
     }
 
     None
@@ -154,7 +152,7 @@ fn draw_menu(buf: &mut Buffer, area: Rect, menu: &Menu) {
     let inner = block.inner(rect);
     block.render(rect, buf);
     for (i, (y, opener)) in (inner.y..inner.bottom()).zip(menu.openers).enumerate() {
-        let style = if i == menu.cursor { CURSOR } else { Style::new() };
+        let style = if i == menu.cursor { config::get().style.cursor } else { Style::new() };
         buf.set_style(Rect { y, height: 1, ..inner }, style);
         buf.set_stringn(inner.x + 1, y, format!("{} {}", i + 1, opener.desc), (inner.width as usize).saturating_sub(1), style);
     }
@@ -180,9 +178,10 @@ pub fn header(cwd: &Path) -> String {
 }
 
 fn columns(area: Rect) -> [Rect; 3] {
-    let total: u32 = RATIO.iter().map(|&r| r as u32).sum();
+    let (r0, r1, r2) = config::get().ratio;
+    let total = (r0 as u32 + r1 as u32 + r2 as u32).max(1);
     let width = |r: u16| (area.width as u32 * r as u32 / total) as u16;
-    let (w0, w1) = (width(RATIO[0]), width(RATIO[1]));
+    let (w0, w1) = (width(r0), width(r1));
     [
         Rect { width: w0, ..area },
         Rect { x: area.x + w0, width: w1, ..area },
@@ -201,7 +200,7 @@ struct List<'a> {
 /// Draws a column with no scroll state of its own, scrolled just enough to show `cursor`.
 fn draw_side(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, listing: &Listing, cursor: Option<usize>) {
     let height = area.height as usize;
-    let so = SCROLLOFF.min(height.saturating_sub(1) / 2);
+    let so = config::get().scrolloff.min(height.saturating_sub(1) / 2);
     let offset = cursor
         .map_or(0, |c| (c + so + 1).saturating_sub(height))
         .min(listing.entries.len().saturating_sub(height));
@@ -213,24 +212,24 @@ fn draw_side(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, listing: &List
 fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, find: Option<&Matcher>) {
     let width = area.width.saturating_sub(2) as usize;
     if let Some(err) = list.error {
-        buf.set_stringn(area.x + 1, area.y, err, width, ERROR);
+        buf.set_stringn(area.x + 1, area.y, err, width, config::get().style.error);
         return;
     }
     let rows = list.entries.iter().enumerate().skip(list.offset).take(area.height as usize);
     for (y, (i, entry)) in (area.y..).zip(rows) {
         let mut style = if entry.is_dir {
-            DIR
+            config::get().style.dir
         } else if entry.is_link {
-            LINK
+            config::get().style.link
         } else {
             Style::new()
         };
         if find.is_some_and(|m| m.matches(entry)) {
-            style = style.patch(FIND);
+            style = style.patch(config::get().style.find);
         }
         if Some(i) == list.cursor {
-            buf.set_style(Rect { y, height: 1, ..area }, CURSOR);
-            style = style.patch(CURSOR);
+            buf.set_style(Rect { y, height: 1, ..area }, config::get().style.cursor);
+            style = style.patch(config::get().style.cursor);
         }
         buf.set_stringn(area.x + 1, y, entry.name.to_string_lossy(), width, style);
         if let Some(mark) = app.mark(dir, entry)
@@ -239,9 +238,9 @@ fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, fi
             // Reset first so the cursor's reverse video doesn't swap the colour away.
             cell.reset();
             cell.set_style(match mark {
-                Mark::Selected => MARK_SELECTED,
-                Mark::Copied => MARK_COPIED,
-                Mark::Cut => MARK_CUT,
+                Mark::Selected => config::get().style.mark_selected,
+                Mark::Copied => config::get().style.mark_copied,
+                Mark::Cut => config::get().style.mark_cut,
             });
         }
     }

@@ -20,7 +20,7 @@ use syntect::highlighting::{FontStyle, Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
-use crate::config::{IMAGE_MAX, PREVIEW_TIMEOUT, Previewer, SYNTAX_THEME, TAB_SIZE, previewer};
+use crate::config::{self, Previewer};
 use crate::open;
 
 /// Text previews stop after this much input, or this many lines.
@@ -101,15 +101,25 @@ impl Worker {
 
 /// `partial` receives an early version of a slow preview (the first screen of highlighted code).
 /// `stale` says a newer request is waiting, so the rest isn't worth finishing.
+/// The rule's previewers are tried in order; if none works, the first one's error is shown.
 fn build(req: &Request, partial: &mut dyn FnMut(Preview), stale: &dyn Fn() -> bool) -> Preview {
-    let kind = open::kind(&req.path, false);
-    let res = match previewer(kind) {
-        Previewer::Text => text(req, partial, stale),
-        Previewer::Image => image(req),
-        Previewer::ImageCmd(script) => image_cmd(req, script),
-        Previewer::Cmd(script) => run(script, req, MAX_BYTES).map(|out| Preview::Text(lines(&out))),
-    };
-    res.unwrap_or_else(Preview::Note)
+    let previewers = open::rule(&req.path, false).map_or(&[][..], |rule| &rule.preview);
+    let mut first_err = None;
+    for previewer in previewers {
+        let res = match previewer {
+            Previewer::Text => text(req, partial, stale),
+            Previewer::Image => image(req),
+            Previewer::ImageCmd(script) => image_cmd(req, script),
+            Previewer::Cmd(script) => run(script, req, MAX_BYTES).map(|out| Preview::Text(lines(&out))),
+        };
+        match res {
+            Ok(preview) => return preview,
+            Err(e) => {
+                first_err.get_or_insert(e);
+            }
+        }
+    }
+    Preview::Note(first_err.unwrap_or_else(|| "no previewer".into()))
 }
 
 fn text(req: &Request, partial: &mut dyn FnMut(Preview), stale: &dyn Fn() -> bool) -> Result<Preview, String> {
@@ -119,7 +129,7 @@ fn text(req: &Request, partial: &mut dyn FnMut(Preview), stale: &dyn Fn() -> boo
     // Highlighting runs at roughly 10k lines a second, so the first screen goes out on its own.
     let first = req.rows as usize;
     let mut first_screen = |lines| partial(Preview::Text(lines));
-    let highlighted = highlight(&req.path, &text, first, &mut first_screen, stale);
+    let highlighted = highlight(highlighter()?, &req.path, &text, first, &mut first_screen, stale);
     Ok(Preview::Text(highlighted.unwrap_or_else(|| lines(&buf))))
 }
 
@@ -129,19 +139,26 @@ struct Highlighter {
 }
 
 /// bat's grammars (syntect's defaults plus TOML, Nix, Zig, Dockerfile and many more) and
-/// syntect's themes, loaded on first use.
-fn highlighter() -> &'static Highlighter {
-    static HIGHLIGHTER: OnceLock<Highlighter> = OnceLock::new();
-    HIGHLIGHTER.get_or_init(|| {
+/// syntect's themes, loaded on first use. A bad theme name fails every text preview, so it
+/// gets noticed.
+fn highlighter() -> Result<&'static Highlighter, String> {
+    static HIGHLIGHTER: OnceLock<Result<Highlighter, String>> = OnceLock::new();
+    let res = HIGHLIGHTER.get_or_init(|| {
+        let name = &config::get().syntax_theme;
         let mut themes = ThemeSet::load_defaults().themes;
-        let theme = themes.remove(SYNTAX_THEME).expect("SYNTAX_THEME names one of syntect's bundled themes");
-        Highlighter { syntaxes: two_face::syntax::extra_newlines(), theme }
-    })
+        let Some(theme) = themes.remove(name) else {
+            let names: Vec<_> = themes.keys().map(String::as_str).collect();
+            return Err(format!("no syntax theme \"{name}\"; there are {}", names.join(", ")));
+        };
+        Ok(Highlighter { syntaxes: two_face::syntax::extra_newlines(), theme })
+    });
+    res.as_ref().map_err(Clone::clone)
 }
 
 /// Syntax colouring, found by extension, then file name (Makefile), then first line (#!).
 /// None for plain text, and for text that brings its own colours, like a coloured log.
 fn highlight(
+    highlighter: &Highlighter,
     path: &Path,
     text: &str,
     first: usize,
@@ -151,7 +168,7 @@ fn highlight(
     if text.contains('\x1b') {
         return None;
     }
-    let Highlighter { syntaxes, theme } = highlighter();
+    let Highlighter { syntaxes, theme } = highlighter;
     let by_ext = |name: Option<&OsStr>| syntaxes.find_syntax_by_extension(name?.to_str()?);
     let syntax = by_ext(path.extension())
         .or_else(|| by_ext(path.file_name()))
@@ -202,7 +219,8 @@ fn push_expanded(buf: &mut String, text: &str, col: &mut usize) {
     for c in text.chars() {
         match c {
             '\t' => {
-                let n = TAB_SIZE - *col % TAB_SIZE;
+                let tab = config::get().tab_size.max(1);
+                let n = tab - *col % tab;
                 buf.extend(std::iter::repeat_n(' ', n));
                 *col += n;
             }
@@ -220,11 +238,7 @@ fn image(req: &Request) -> Result<Preview, String> {
         .and_then(|r| r.with_guessed_format())
         .map_err(|e| e.to_string())
         .and_then(|r| r.decode().map_err(|e| e.to_string()));
-    match decoded {
-        Ok(img) => Ok(fit(img, req)),
-        // Formats the image crate doesn't do (avif, heic, jxl, ...) may still get through ffmpeg.
-        Err(e) => image_cmd(req, r#"ffmpeg -v error -i "$1" -frames:v 1 -f image2pipe -c:v png -"#).map_err(|_| e),
-    }
+    decoded.map(|img| fit(img, req))
 }
 
 fn image_cmd(req: &Request, script: &str) -> Result<Preview, String> {
@@ -233,10 +247,10 @@ fn image_cmd(req: &Request, script: &str) -> Result<Preview, String> {
     Ok(fit(img, req))
 }
 
-/// Shrinks to fit the preview area (never enlarges), capped at IMAGE_MAX.
+/// Shrinks to fit the preview area (never enlarges), capped at the configured image_max.
 fn fit(img: DynamicImage, req: &Request) -> Preview {
-    let max_w = req.px.0.min(IMAGE_MAX.0);
-    let max_h = req.px.1.min(IMAGE_MAX.1);
+    let (cap_w, cap_h) = config::get().image_max;
+    let (max_w, max_h) = (req.px.0.min(cap_w), req.px.1.min(cap_h));
     let img = if img.width() > max_w || img.height() > max_h { img.thumbnail(max_w, max_h) } else { img };
     static NEXT_ID: AtomicU32 = AtomicU32::new(1);
     let (width, height) = (img.width(), img.height());
@@ -244,7 +258,7 @@ fn fit(img: DynamicImage, req: &Request) -> Preview {
 }
 
 /// Runs a previewer script with the file as $1 and the area in $COLUMNS/$LINES, returning at
-/// most `limit` bytes of its stdout. It's killed if it takes longer than PREVIEW_TIMEOUT.
+/// most `limit` bytes of its stdout. It's killed if it takes longer than the preview timeout.
 fn run(script: &str, req: &Request, limit: u64) -> Result<Vec<u8>, String> {
     let mut child = Command::new("sh")
         .arg("-c")
@@ -277,7 +291,7 @@ fn run(script: &str, req: &Request, limit: u64) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// Kills a previewer's process group if it runs past PREVIEW_TIMEOUT, or when told to.
+/// Kills a previewer's process group if it runs past the preview timeout, or when told to.
 struct Watchdog {
     pgid: i32,
     done: Arc<(Mutex<bool>, Condvar)>,
@@ -290,7 +304,7 @@ impl Watchdog {
         let flag = done.clone();
         thread::spawn(move || {
             let (lock, cvar) = &*flag;
-            let deadline = Instant::now() + PREVIEW_TIMEOUT;
+            let deadline = Instant::now() + config::get().preview_timeout;
             let mut finished = lock.lock().unwrap_or_else(|e| e.into_inner());
             while !*finished {
                 let left = deadline.saturating_duration_since(Instant::now());

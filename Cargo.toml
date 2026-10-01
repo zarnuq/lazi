@@ -7,6 +7,8 @@ edition = "2024"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 libc = "0.2.189"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+ron = { version = "0.12.2", default-features = false }
+serde = { version = "1.0.229", default-features = false, features = ["derive", "std"] }
 signal-hook = "0.3"
 syntect = { version = "5.3.0", default-features = false, features = ["parsing", "default-themes", "dump-load", "regex-fancy"] }
 two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }

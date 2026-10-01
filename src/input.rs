@@ -1,9 +1,8 @@
-//! A single-line text input with readline-style keys.
+//! A single-line text input with readline-style editing.
 
-use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::text::Span;
 
-use crate::config::Key;
+use crate::config::PromptAction;
 
 pub struct Input {
     pub text: String,
@@ -27,44 +26,41 @@ impl Input {
         Span::raw(&self.text[..self.cursor]).width()
     }
 
-    /// Returns false for keys it doesn't handle (Enter, Esc, ...).
-    pub fn key(&mut self, (code, mods): Key) -> bool {
-        let ctrl = mods.contains(KeyModifiers::CONTROL);
-        match code {
-            KeyCode::Char('a') if ctrl => self.cursor = 0,
-            KeyCode::Char('e') if ctrl => self.cursor = self.text.len(),
-            KeyCode::Char('u') if ctrl => {
+    pub fn insert(&mut self, c: char) {
+        self.text.insert(self.cursor, c);
+        self.cursor += c.len_utf8();
+    }
+
+    /// Returns false for actions that aren't edits (submit, cancel, ...).
+    pub fn edit(&mut self, action: &PromptAction) -> bool {
+        match action {
+            PromptAction::Home => self.cursor = 0,
+            PromptAction::End => self.cursor = self.text.len(),
+            PromptAction::KillToStart => {
                 self.text.drain(..self.cursor);
                 self.cursor = 0;
             }
-            KeyCode::Char('k') if ctrl => self.text.truncate(self.cursor),
-            KeyCode::Char('w') if ctrl => {
+            PromptAction::KillToEnd => self.text.truncate(self.cursor),
+            PromptAction::DeleteWord => {
                 let before = self.text[..self.cursor].trim_end_matches(' ');
                 let start = before.rfind([' ', '/']).map_or(0, |i| i + 1);
                 self.text.drain(start..self.cursor);
                 self.cursor = start;
             }
-            KeyCode::Char(_) if ctrl => return false,
-            KeyCode::Char(c) => {
-                self.text.insert(self.cursor, c);
-                self.cursor += c.len_utf8();
-            }
-            KeyCode::Backspace => {
+            PromptAction::Backspace => {
                 if let Some(prev) = self.prev() {
                     self.text.drain(prev..self.cursor);
                     self.cursor = prev;
                 }
             }
-            KeyCode::Delete => {
+            PromptAction::Delete => {
                 if let Some(next) = self.next() {
                     self.text.drain(self.cursor..next);
                 }
             }
-            KeyCode::Left => self.cursor = self.prev().unwrap_or(0),
-            KeyCode::Right => self.cursor = self.next().unwrap_or(self.text.len()),
-            KeyCode::Home => self.cursor = 0,
-            KeyCode::End => self.cursor = self.text.len(),
-            _ => return false,
+            PromptAction::Left => self.cursor = self.prev().unwrap_or(0),
+            PromptAction::Right => self.cursor = self.next().unwrap_or(self.text.len()),
+            PromptAction::Submit | PromptAction::Cancel | PromptAction::Complete => return false,
         }
         true
     }

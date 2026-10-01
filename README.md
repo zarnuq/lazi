@@ -2,7 +2,8 @@
 
 A small, fast terminal file manager in the style of [yazi](https://github.com/sxyazi/yazi)
 and ranger: three columns (parent, current, preview), vim keys, and image previews over
-kitty's graphics protocol. It is configured by editing `src/config.rs` and rebuilding.
+kitty's graphics protocol. Every key, previewer, opener and colour comes from a config file;
+nothing is built in.
 
 Linux only (inotify, eventfd, memfd).
 
@@ -14,12 +15,13 @@ From source (Rust 1.88+):
 
 ```sh
 cargo install --path .
+mkdir -p ~/.config/lazi && cp config.ron ~/.config/lazi/
 ```
 
 ## Usage
 
 ```sh
-lazi [DIR] [--cwd-file PATH]
+lazi [DIR] [--cwd-file PATH] [--config PATH]
 ```
 
 `--cwd-file` writes the directory lazi was in when you quit with `q` (not `Q`). A shell
@@ -39,12 +41,27 @@ l() {
 
 ## Configuration
 
-Everything lives in [`src/config.rs`](src/config.rs): the keymap, colours, column ratio,
-syntax theme, which previewer and which openers each file kind gets, and the clipboard
-command. Edit and rebuild.
+lazi reads the first of `--config PATH`, `$XDG_CONFIG_HOME/lazi/config.ron` (usually
+`~/.config/lazi/config.ron`) and `$XDG_CONFIG_DIRS/lazi/config.ron` (usually
+`/etc/xdg/lazi/config.ron`). There are no built-in defaults: every setting is required, an
+unbound key does nothing, and lazi refuses to start without a config, or with a mistake in
+it, naming the line. Start from [`config.ron`](config.ron), which documents every option.
 
-The defaults call out to these, all optional; lazi works without them and reports what's
-missing when you use it:
+The file is [RON](https://github.com/ron-rs/ron). It covers:
+
+- options: hidden files, column ratio, scrolloff, syntax theme, tab size, preview timeout,
+  the clipboard and cross-filesystem trash commands;
+- styles for every coloured element;
+- named openers (shell snippets, blocking or detached);
+- ordered rules matching directories, extensions or text files to a chain of previewers and
+  a list of openers;
+- keymaps for normal mode, the opener menu and prompts, plus the confirmation keys. Keys read
+  like `"Ctrl+u"` or `"Shift+PageUp"`, and sequences like `"gg"` or `"Ctrl+x Ctrl+s"`. `Run`
+  binds any shell snippet to a key, with an option to go to the path it prints (the fzf
+  binding works this way).
+
+The example config calls out to these, all optional; lazi works without them and reports
+what's missing when you use it:
 
 | Tool | For |
 | --- | --- |
@@ -106,9 +123,11 @@ missing when you use it:
 - Synchronized updates, so no half-drawn frames; the terminal title shows the cwd.
 - `--cwd-file` for cd-on-quit (`Q` skips it); `^z` suspends.
 - `--bench` measures time to the first frame.
-- Configured at compile time in `src/config.rs`.
+- Configured entirely from a RON file.
 
 ## Keys
+
+These are the bindings in the example `config.ron`.
 
 | Key | Action |
 | --- | --- |
