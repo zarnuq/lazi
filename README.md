@@ -69,13 +69,14 @@ what's missing when you use it:
 | --- | --- |
 | a kitty-graphics terminal (kitty, ghostty, wezterm) | image previews |
 | `ffmpeg` | video thumbnails, images the `image` crate can't decode |
-| `exiftool` | audio and PDF metadata previews |
+| `pdftoppm` (poppler) | PDF previews |
+| `exiftool` | audio and document metadata previews |
 | `bsdtar` (libarchive) | archive listings, "Extract here" |
 | `file` | previews of everything else |
 | `wl-copy` (wl-clipboard) | `cc` and friends |
 | `fzf` | `z` |
 | `gio` (glib) | trashing files on another filesystem |
-| `$EDITOR` (else `nvim`), `xdg-open`, `swayimg`, `zathura`, `mpv`, `mediainfo` | openers |
+| `$EDITOR` (else `nvim`), `xdg-open`, `swayimg`, `mpv`, `mediainfo` | openers |
 
 ## Features
 

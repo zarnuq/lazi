@@ -158,7 +158,6 @@
         "reveal": (desc: "Reveal", run: r#"xdg-open "$(dirname "$1")""#),
         "view": (desc: "View", run: r#"swayimg "$1""#),
         "setbg": (desc: "Set wallpaper", run: r#"qs ipc call wallpaper set "$1""#),
-        "read": (desc: "Read", run: r#"zathura "$1""#),
         "play": (desc: "Play", run: r#"mpv --force-window "$@""#),
         "mediainfo": (desc: "Media info", run: r#"mediainfo "$1"; echo "Press enter to exit"; read _"#, block: true),
         "extract": (desc: "Extract here", run: r#"for f; do bsdtar -xf "$f"; done"#),
@@ -187,10 +186,19 @@
             open: ["view", "setbg", "open", "reveal"],
         ),
         (
-            ext: ["pdf", "epub", "djvu"],
+            ext: ["pdf"],
+            // The first page, falling back to metadata if poppler is missing or the file is broken.
+            preview: [
+                ImageCmd(r#"pdftoppm -png -f 1 -l 1 -singlefile -scale-to 1500 "$1""#),
+                Cmd(r#"exiftool -S --File:all --ExifTool:all "$1""#),
+            ],
+            open: ["open", "reveal"],
+        ),
+        (
+            ext: ["epub", "djvu"],
             // Metadata only, without exiftool's own and the filesystem's.
             preview: [Cmd(r#"exiftool -S --File:all --ExifTool:all "$1""#)],
-            open: ["read", "open", "reveal"],
+            open: ["open", "reveal"],
         ),
         (
             ext: ["mp4", "mkv", "webm", "mov", "avi", "m4v", "flv", "wmv"],
