@@ -95,8 +95,9 @@ what's missing when you use it:
 - ANSI colours in files and command output are kept; tabs are expanded. `J`/`K` scroll.
 - Images decoded in process and shown with kitty's graphics protocol. Formats the image
   crate can't read (avif, heic, jxl) go through ffmpeg.
-- Video gets an ffmpeg thumbnail; audio and PDFs exiftool metadata; archives a bsdtar
-  listing; everything else `file -b`.
+- PDFs show a page at a time (pdftoppm), `J`/`K` turning pages. Video gets an ffmpeg
+  thumbnail; audio, epub and djvu exiftool metadata; archives a bsdtar listing; everything
+  else `file -b`.
 - Only the file you stop on is previewed. Preview commands are killed after 3s, and a
   decoder panic shows as a note instead of a crash.
 
@@ -160,7 +161,7 @@ These are the bindings in the example `config.ron`.
 | `Esc` | Clear the selection, else the filter, else the find highlight |
 | `z` | Jump with fzf |
 | `cc` `cd` `cf` `cn` | Copy path / directory / file name / name without extension |
-| `J` `K` | Scroll the preview |
+| `J` `K` | Scroll the preview, or turn a PDF's pages |
 | `^z` | Suspend |
 | `q` / `Q` | Quit / quit without writing the cwd file |
 

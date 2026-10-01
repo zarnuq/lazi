@@ -39,6 +39,8 @@ pub struct Request {
     pub cols: u16,
     pub rows: u16,
     pub px: (u32, u32),
+    /// The page of an ImagePages preview, from 0.
+    pub page: usize,
 }
 
 pub enum Preview {
@@ -54,6 +56,8 @@ pub struct Image {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    /// From ImagePages, so Seek turns pages.
+    pub paged: bool,
 }
 
 type Mailbox = Arc<(Mutex<Option<Request>>, Condvar)>;
@@ -102,14 +106,22 @@ impl Worker {
 /// `partial` receives an early version of a slow preview (the first screen of highlighted code).
 /// `stale` says a newer request is waiting, so the rest isn't worth finishing.
 /// The rule's previewers are tried in order; if none works, the first one's error is shown.
+/// Past the first page only ImagePages previewers are tried, so the last page doesn't fall
+/// through to some other preview.
 fn build(req: &Request, partial: &mut dyn FnMut(Preview), stale: &dyn Fn() -> bool) -> Preview {
     let previewers = open::rule(&req.path, false).map_or(&[][..], |rule| &rule.preview);
     let mut first_err = None;
-    for previewer in previewers {
+    for previewer in previewers.iter().filter(|p| req.page == 0 || matches!(p, Previewer::ImagePages(_))) {
         let res = match previewer {
             Previewer::Text => text(req, partial, stale),
             Previewer::Image => image(req),
             Previewer::ImageCmd(script) => image_cmd(req, script),
+            Previewer::ImagePages(script) => image_cmd(req, script).map(|mut preview| {
+                if let Preview::Image(img) = &mut preview {
+                    img.paged = true;
+                }
+                preview
+            }),
             Previewer::Cmd(script) => run(script, req, MAX_BYTES).map(|out| Preview::Text(lines(&out))),
         };
         match res {
@@ -254,10 +266,11 @@ fn fit(img: DynamicImage, req: &Request) -> Preview {
     let img = if img.width() > max_w || img.height() > max_h { img.thumbnail(max_w, max_h) } else { img };
     static NEXT_ID: AtomicU32 = AtomicU32::new(1);
     let (width, height) = (img.width(), img.height());
-    Preview::Image(Image { id: NEXT_ID.fetch_add(1, Ordering::Relaxed), width, height, rgba: img.into_rgba8().into_raw() })
+    Preview::Image(Image { id: NEXT_ID.fetch_add(1, Ordering::Relaxed), width, height, rgba: img.into_rgba8().into_raw(), paged: false })
 }
 
-/// Runs a previewer script with the file as $1 and the area in $COLUMNS/$LINES, returning at
+/// Runs a previewer script with the file as $1, the area in $COLUMNS/$LINES and the page (from 1)
+/// in $PAGE, returning at
 /// most `limit` bytes of its stdout. It's killed if it takes longer than the preview timeout.
 fn run(script: &str, req: &Request, limit: u64) -> Result<Vec<u8>, String> {
     let mut child = Command::new("sh")
@@ -267,6 +280,7 @@ fn run(script: &str, req: &Request, limit: u64) -> Result<Vec<u8>, String> {
         .arg(&req.path)
         .env("COLUMNS", req.cols.to_string())
         .env("LINES", req.rows.to_string())
+        .env("PAGE", (req.page + 1).to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

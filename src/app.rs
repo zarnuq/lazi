@@ -230,7 +230,10 @@ impl App {
         let cols = area.width - 2;
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         let px = (cols as u32 * cell_w, area.height as u32 * cell_h);
-        let req = Request { path, mtime, cols, rows: area.height, px };
+        // Stay on the page being shown or asked for; another file starts at the first.
+        let shown = self.preview.as_ref().map(|(r, _)| r);
+        let page = self.preview_wanted.iter().chain(shown).find(|r| r.path == path).map_or(0, |r| r.page);
+        let req = Request { path, mtime, cols, rows: area.height, px, page };
         if self.preview.as_ref().is_some_and(|(r, _)| *r == req) || self.preview_wanted.as_ref() == Some(&req) {
             return;
         }
@@ -238,11 +241,26 @@ impl App {
         self.previewer.request(req);
     }
 
-    /// Scrolls a text preview.
+    /// Scrolls a text preview, or turns one page of a paged image in the direction of `delta`.
     pub fn seek(&mut self, delta: isize) {
-        if let Some(Preview::Text(lines)) = self.current_preview() {
-            let last = lines.len().saturating_sub(1);
-            self.preview_scroll = self.preview_scroll.saturating_add_signed(delta).min(last);
+        match self.current_preview() {
+            Some(Preview::Text(lines)) => {
+                let last = lines.len().saturating_sub(1);
+                self.preview_scroll = self.preview_scroll.saturating_add_signed(delta).min(last);
+            }
+            Some(Preview::Image(img)) if img.paged => {
+                // From the page already asked for, so presses made while one renders add up.
+                let Some((shown, _)) = &self.preview else { return };
+                let mut req = self.preview_wanted.clone().filter(|r| r.path == shown.path).unwrap_or_else(|| shown.clone());
+                let page = req.page.saturating_add_signed(delta.signum());
+                if page == req.page {
+                    return;
+                }
+                req.page = page;
+                self.preview_wanted = Some(req.clone());
+                self.previewer.request(req);
+            }
+            _ => {}
         }
     }
 
@@ -714,6 +732,11 @@ impl App {
                         && *current == req
                     {
                         *old = preview;
+                    // A page past the last: stay on the one showing.
+                    } else if req.page > 0 && matches!(preview, Preview::Note(_)) {
+                        if self.preview_wanted.as_ref() == Some(&req) {
+                            self.preview_wanted = None;
+                        }
                     // Anything else is for a file already scrolled past.
                     } else if self.preview_wanted.as_ref() == Some(&req) {
                         if self.preview.as_ref().is_none_or(|(old, _)| old.path != req.path) {

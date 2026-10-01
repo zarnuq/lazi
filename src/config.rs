@@ -158,6 +158,9 @@ pub enum Previewer {
     Image,
     /// A script printing an image (e.g. PNG) to stdout.
     ImageCmd(String),
+    /// Like ImageCmd, printing page $PAGE (from 1); Seek steps through the pages. Failing past
+    /// the last page keeps the one before.
+    ImagePages(String),
     /// A script whose output is shown as text; ANSI colours are kept.
     Cmd(String),
 }
@@ -224,7 +227,7 @@ pub enum Action {
     Filter,
     CopyPath(Part),
     Suspend,
-    /// Scroll the file preview by this many lines.
+    /// Scroll the file preview by this many lines, or a paged one a page in that direction.
     Seek(isize),
     /// A `sh -c` snippet with the targets as "$@". `block` hands it the terminal; `reveal` also
     /// does, and then goes to the path it prints (as with fzf).

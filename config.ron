@@ -172,6 +172,7 @@
     //   Text            the file itself, syntax highlighted
     //   Image           decoded in process, shown with kitty's graphics protocol
     //   ImageCmd("...") a script printing an image (e.g. PNG) to stdout
+    //   ImagePages("...") the same, printing page $PAGE (from 1); Seek turns pages
     //   Cmd("...")      a script whose output is shown as text, ANSI colours kept
     // Scripts get the file as "$1" and the preview area as $COLUMNS and $LINES. Directories are
     // always previewed as a listing.
@@ -189,7 +190,7 @@
             ext: ["pdf"],
             // The first page, falling back to metadata if poppler is missing or the file is broken.
             preview: [
-                ImageCmd(r#"pdftoppm -png -f 1 -l 1 -singlefile -scale-to 1500 "$1""#),
+                ImagePages(r#"pdftoppm -png -f "$PAGE" -l "$PAGE" -singlefile -scale-to 1500 "$1""#),
                 Cmd(r#"exiftool -S --File:all --ExifTool:all "$1""#),
             ],
             open: ["open", "reveal"],
@@ -296,7 +297,7 @@
             "cf": CopyPath(Name),
             "cn": CopyPath(Stem),
             "Ctrl+z": Suspend,
-            // Scrolls the file preview by lines.
+            // Scrolls the file preview by lines, or pages through a PDF.
             "K": Seek(-5),
             "J": Seek(5),
         },
