@@ -880,6 +880,7 @@ dependencies = [
 name = "shop"
 version = "0.1.0"
 dependencies = [
+ "fancy-regex",
  "lazi",
  "libc",
  "ratatui",

@@ -1,10 +1,11 @@
 //! shop: a terminal workspace that shows one panel at a time, the lazi file browser first.
-//! Every key goes to shop's own bindings first (chords like Alt+1 that panels don't use); the
-//! rest go to the focused panel.
+//! Every key goes to shop's own bindings first (the number keys, Ctrl+c, Ctrl+p), unless a panel
+//! is taking text; the rest go to the focused panel.
 
 mod config;
 mod git;
 mod panel;
+mod search;
 mod session;
 mod status;
 
@@ -16,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{env, io, mem, process};
 
-use lazi::{Key, LOAD_GRACE, Lazi, Lookup, Outcome, wake};
+use lazi::{Cmd, Key, LOAD_GRACE, Lazi, Lookup, Outcome, wake};
 use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -29,6 +30,7 @@ use ratatui::widgets::{Block, Clear, Widget};
 
 use config::{Action, Config, HelpAction, PanelSpec};
 use panel::Panel;
+use search::{Done, Hit, Search};
 
 struct Shop {
     config: Config,
@@ -40,6 +42,10 @@ struct Shop {
     help: Option<usize>,
     /// How many menu lines fit, from the last frame, for paging.
     help_page: usize,
+    /// The Ctrl+p search box, while it's up.
+    search: Option<Search>,
+    /// Folders the lazi tabs have been in, newest first, for the search box.
+    folders: Vec<PathBuf>,
 }
 
 enum Exit {
@@ -98,7 +104,7 @@ fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBu
     let saved = if config.restore { session::load() } else { None };
     let (specs, focus) = session::layout(saved, &config.panels, here, Path::is_dir);
     let panels = specs.iter().map(Panel::new).collect::<Result<Vec<_>, _>>()?;
-    let mut shop = Shop { config, panels, focus, pending: Vec::new(), help: None, help_page: 0 };
+    let mut shop = Shop { config, panels, focus, pending: Vec::new(), help: None, help_page: 0, search: None, folders: session::load_folders() };
     let mut term = ratatui::init();
     let res = run(&mut term, &mut shop, bench);
     for panel in &mut shop.panels {
@@ -106,6 +112,11 @@ fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBu
     }
     ratatui::restore();
 
+    if !matches!(res, Ok(Exit::Bench(_)))
+        && let Err(e) = session::save_folders(&shop.folders)
+    {
+        eprintln!("shop: saving visited folders: {e}");
+    }
     if shop.config.restore
         && !matches!(res, Ok(Exit::Bench(_)))
         && let Err(e) = session::save(&shop.session())
@@ -154,6 +165,7 @@ fn run(term: &mut DefaultTerminal, shop: &mut Shop, bench: Option<Instant>) -> i
             for panel in &shop.panels {
                 fds.extend(panel.wake_fds());
             }
+            fds.extend(shop.search.as_ref().map(Search::wake_fd));
             wake::wait(&fds)?;
         }
         dirty |= wake::drain(winch.as_raw_fd());
@@ -170,6 +182,13 @@ fn run(term: &mut DefaultTerminal, shop: &mut Shop, bench: Option<Instant>) -> i
             if let Some(exit) = handle(term, shop, lazi::normalize(key))? {
                 return Ok(exit);
             }
+            // Keys are what move lazi tabs, so after one is when a new folder can show up.
+            if let Some(lazi) = shop.panels[shop.focus].lazi() {
+                session::remember(&mut shop.folders, lazi.cwd());
+            }
+        }
+        if let Some(search) = &mut shop.search {
+            dirty |= search.receive();
         }
         for panel in &mut shop.panels {
             dirty |= panel.receive(Some(Duration::ZERO));
@@ -201,6 +220,35 @@ fn route<'a>(bound: &'a [(Vec<Key>, Action)], pending: &mut Vec<Key>, key: Key) 
 
 /// Handles a key press. Returns how shop should exit, if it should.
 fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<Option<Exit>> {
+    if let Some(search) = &mut shop.search {
+        match search.key(key) {
+            Done::Stay => {}
+            Done::Close => shop.search = None,
+            // A folder or repo goes to lazi either way.
+            Done::Open(Hit::Repo(dir) | Hit::Dir(dir)) | Done::Reveal(Hit::Repo(dir) | Hit::Dir(dir)) => {
+                shop.search = None;
+                open(term, shop, &dir)?;
+            }
+            Done::Open(hit) => {
+                let root = search.root.clone();
+                let spec = &shop.config.search;
+                let (script, args) = match hit {
+                    Hit::Line(path, n, _) => (&spec.open_line, vec![root.join(path), PathBuf::from(n.to_string())]),
+                    Hit::File(path) | Hit::Text(path) | Hit::Repo(path) | Hit::Dir(path) => (&spec.open, vec![root.join(path)]),
+                };
+                let cmd = Cmd { desc: script, script, args: &args, block: true };
+                // Blocking, so a failure is only the editor's own exit status: nothing to keep.
+                let _ = lazi::run(term, &cmd, &root, Box::new(|_| {}))?;
+                shop.search = None;
+            }
+            Done::Reveal(Hit::File(path) | Hit::Text(path) | Hit::Line(path, ..)) => {
+                let root = search.root.clone();
+                shop.search = None;
+                reveal(term, shop, &root.join(path))?;
+            }
+        }
+        return Ok(None);
+    }
     if let Some(top) = shop.help {
         // The menu takes every key; ones it doesn't bind do nothing.
         shop.pending.push(key);
@@ -226,6 +274,14 @@ fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<O
     let next = match routed {
         Route::Wait => return Ok(None),
         Route::Shop(Action::Quit) => return Ok(Some(Exit::Quit)),
+        Route::Shop(Action::Search) => {
+            let (root, repos) = search_root(shop);
+            match Search::open(shop.config.search.clone(), root, repos, shop.folders.clone()) {
+                Ok(search) => shop.search = Some(search),
+                Err(e) => eprintln!("shop: search: {e}"),
+            }
+            return Ok(None);
+        }
         Route::Shop(Action::Next) => (shop.focus + 1) % len,
         Route::Shop(Action::Prev) => (shop.focus + len - 1) % len,
         Route::Shop(Action::Focus(i)) => if *i < len { *i } else { shop.focus },
@@ -302,13 +358,39 @@ fn focus(term: &mut DefaultTerminal, shop: &mut Shop, next: usize) -> io::Result
     Ok(())
 }
 
-/// Shows `dir` in the first lazi panel and focuses it. Without a lazi panel it does nothing.
+/// The lazi tab things go to: the focused one, else tab 1.
+fn lazi_tab(shop: &Shop) -> Option<usize> {
+    if shop.panels[shop.focus].lazi().is_some() { Some(shop.focus) } else { shop.panels.iter().position(|p| p.lazi().is_some()) }
+}
+
+/// Shows `dir` in a lazi tab and focuses it. Without a lazi panel it does nothing.
 fn open(term: &mut DefaultTerminal, shop: &mut Shop, dir: &Path) -> io::Result<()> {
-    let Some(i) = shop.panels.iter().position(|p| matches!(p, Panel::Lazi(_))) else { return Ok(()) };
+    let Some(i) = lazi_tab(shop) else { return Ok(()) };
     if let Panel::Lazi(lazi) = &mut shop.panels[i] {
         lazi.goto(dir);
     }
     focus(term, shop, i)
+}
+
+/// Shows `path` in a lazi tab, the cursor on it, and focuses that tab.
+fn reveal(term: &mut DefaultTerminal, shop: &mut Shop, path: &Path) -> io::Result<()> {
+    let Some(i) = lazi_tab(shop) else { return Ok(()) };
+    if let Panel::Lazi(lazi) = &mut shop.panels[i] {
+        lazi.reveal(path);
+    }
+    focus(term, shop, i)
+}
+
+/// Where the search box looks, and the repos it offers: under the focused lazi tab, or from the
+/// git tab under its selected repo.
+fn search_root(shop: &Shop) -> (PathBuf, Vec<PathBuf>) {
+    let repos: Vec<PathBuf> = shop.panels.iter().flat_map(Panel::repos).collect();
+    let root = match &shop.panels[shop.focus] {
+        Panel::Git(git) => git.selected(),
+        Panel::Lazi(lazi) => Some(lazi.cwd().to_path_buf()),
+    };
+    let root = root.or_else(|| shop.panels.iter().find_map(|p| p.lazi()).map(|l| l.cwd().to_path_buf())).unwrap_or_else(|| PathBuf::from("."));
+    (root, repos)
 }
 
 /// The tab bar on the top row, the focused panel below it, as one synchronized update so the
@@ -326,8 +408,11 @@ fn draw(term: &mut DefaultTerminal, shop: &mut Shop) -> io::Result<()> {
         if shop.help.is_some() {
             help(frame.buffer_mut(), body, shop);
         }
+        if let Some(search) = &mut shop.search {
+            search.draw(frame.buffer_mut(), body);
+        }
     })?;
-    if shop.help.is_some() {
+    if shop.help.is_some() || shop.search.is_some() {
         // An image would sit on top of the menu.
         shop.panels[shop.focus].hide(term.backend_mut())?;
     } else {

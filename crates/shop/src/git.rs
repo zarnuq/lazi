@@ -245,6 +245,16 @@ impl Git {
         Ok(Outcome::Continue)
     }
 
+    /// Every repo found, for the search box.
+    pub fn repos(&self) -> Vec<PathBuf> {
+        self.all()
+    }
+
+    /// The repo under the cursor.
+    pub fn selected(&self) -> Option<PathBuf> {
+        self.all().get(self.cursor).cloned()
+    }
+
     /// Every binding, as (keys, action), for the help menu.
     pub fn help(&self) -> Vec<(String, String)> {
         self.spec.keys.iter().map(|(keys, action)| (lazi::key_label(keys), format!("{action:?}"))).collect()

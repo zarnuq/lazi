@@ -85,6 +85,11 @@ impl Lazi {
         config::get().keys.normal.iter().map(|(keys, action)| (key_label(keys), format!("{action:?}"))).collect()
     }
 
+    /// Goes to the folder holding `path` with the cursor on it, or into `path` if it's a folder.
+    pub fn reveal(&mut self, path: &Path) {
+        self.app.reveal(path);
+    }
+
     /// Shows `dir`, picked somewhere else (shop's git panel).
     pub fn goto(&mut self, dir: &Path) {
         self.app.goto_path(dir.to_path_buf());

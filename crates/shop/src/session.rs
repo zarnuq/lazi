@@ -22,23 +22,27 @@ pub struct Session {
     pub tabs: Vec<Tab>,
 }
 
-/// $XDG_STATE_HOME/shop/session, else ~/.local/state/shop/session.
-fn path() -> Option<PathBuf> {
+/// A file in $XDG_STATE_HOME/shop, else ~/.local/state/shop.
+fn state(name: &str) -> Option<PathBuf> {
     let state = env::var_os("XDG_STATE_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).or_else(|| Some(PathBuf::from(env::var_os("HOME")?).join(".local/state")))?;
-    Some(state.join("shop/session"))
+    Some(state.join("shop").join(name))
+}
+
+fn write_state(name: &str, text: &str) -> io::Result<()> {
+    let path = state(name).ok_or_else(|| io::Error::other("no $XDG_STATE_HOME or $HOME"))?;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(path, text)
 }
 
 /// The saved session, if there is one.
 pub fn load() -> Option<Session> {
-    Some(parse(&fs::read_to_string(path()?).ok()?))
+    Some(parse(&fs::read_to_string(state("session")?).ok()?))
 }
 
 pub fn save(session: &Session) -> io::Result<()> {
-    let path = path().ok_or_else(|| io::Error::other("no $XDG_STATE_HOME or $HOME"))?;
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    fs::write(path, render(session))
+    write_state("session", &render(session))
 }
 
 pub fn render(session: &Session) -> String {
@@ -107,9 +111,44 @@ pub fn layout(saved: Option<Session>, specs: &[PanelSpec], here: PathBuf, exists
     (out, one)
 }
 
+/// How many visited folders the search keeps.
+const FOLDERS: usize = 500;
+
+/// Puts `dir` first among the visited folders, moving it up if it was already there.
+pub fn remember(folders: &mut Vec<PathBuf>, dir: &Path) {
+    folders.retain(|f| f != dir);
+    folders.insert(0, dir.to_path_buf());
+    folders.truncate(FOLDERS);
+}
+
+/// The visited folders, newest first, from the last runs.
+pub fn load_folders() -> Vec<PathBuf> {
+    let Some(path) = state("folders") else { return Vec::new() };
+    fs::read_to_string(path).map(|text| text.lines().map(PathBuf::from).collect()).unwrap_or_default()
+}
+
+pub fn save_folders(folders: &[PathBuf]) -> io::Result<()> {
+    let text: String = folders.iter().map(|f| format!("{}\n", f.display())).collect();
+    write_state("folders", &text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remembered_folders_are_newest_first_without_repeats_and_capped() {
+        let mut folders = Vec::new();
+        for dir in ["/a", "/b", "/a"] {
+            remember(&mut folders, Path::new(dir));
+        }
+        assert_eq!(folders, [PathBuf::from("/a"), PathBuf::from("/b")]);
+        for i in 0..600 {
+            remember(&mut folders, Path::new(&format!("/{i}")));
+        }
+        assert_eq!(folders.len(), 500);
+        assert_eq!(folders[0], PathBuf::from("/599"));
+    }
     use crate::config::GitSpec;
 
     fn lazi(dir: &str) -> PanelSpec {

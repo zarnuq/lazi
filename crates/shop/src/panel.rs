@@ -3,6 +3,7 @@
 
 use std::io::{self, Write};
 use std::os::fd::RawFd;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use lazi::{Key, Lazi, Outcome};
@@ -38,6 +39,14 @@ impl Panel {
         match self {
             Panel::Lazi(p) => Some(p),
             Panel::Git(_) => None,
+        }
+    }
+
+    /// The repos a git panel found, for the search box.
+    pub fn repos(&self) -> Vec<PathBuf> {
+        match self {
+            Panel::Lazi(_) => Vec::new(),
+            Panel::Git(p) => p.repos(),
         }
     }
 

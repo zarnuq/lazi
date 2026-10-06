@@ -18,9 +18,49 @@ pub struct Config {
     pub style: Styles,
     /// Whatever no binding here claims goes to the focused panel.
     #[serde(deserialize_with = "lazi::sequences")]
-    pub keys: Vec<(Vec<Key>, Action)>,    /// While the `?` menu is up. Unbound keys do nothing.
+    pub keys: Vec<(Vec<Key>, Action)>,    pub search: SearchSpec,
+    /// While the `?` menu is up. Unbound keys do nothing.
     #[serde(deserialize_with = "lazi::sequences")]
     pub help_keys: Vec<(Vec<Key>, HelpAction)>,
+}
+
+/// The Ctrl+p search box.
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct SearchSpec {
+    /// A `sh -c` snippet that opens file $1.
+    pub open: String,
+    /// The same at line $2.
+    pub open_line: String,
+    pub style: SearchStyles,
+    /// Unbound printable keys type into the query.
+    #[serde(deserialize_with = "lazi::sequences")]
+    pub keys: Vec<(Vec<Key>, SearchAction)>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct SearchStyles {
+    #[serde(deserialize_with = "lazi::style")]
+    pub section: Style,
+    #[serde(deserialize_with = "lazi::style")]
+    pub line_number: Style,
+    #[serde(deserialize_with = "lazi::style")]
+    pub cursor: Style,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub enum SearchAction {
+    Down,
+    Up,
+    /// Open the file in the editor, or go to the folder in lazi.
+    Open,
+    /// Show the file in lazi instead.
+    Reveal,
+    Close,
+    DeleteChar,
+    DeleteWord,
+    Clear,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -124,6 +164,8 @@ pub enum Action {
     /// The panel at this position in `panels`, from 0. Past the end does nothing.
     Focus(usize),
     Quit,
+    /// Open the search box.
+    Search,
 }
 
 /// Reads `path`, or else the first of $XDG_CONFIG_HOME/shop/host.ron and
