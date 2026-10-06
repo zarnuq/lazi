@@ -6,8 +6,9 @@
     //   directory. lazi's config is per process, so a second Lazi panel uses the first's.
     //   Git(roots, depth, fetch_every, symbols, style, keys): repos found under each root, with
     //   zhimmer's status symbols. Keys are the panel's own; Run's $1 is the repo's path.
-    // Reopen the tabs shop had when it last quit (saved in ~/.local/state/shop/session). The tab
-    // that had focus opens where shop is started, or in DIR.
+    // Reopen the tabs shop had when it last quit (saved in ~/.local/state/shop/session). Tab 1
+    // always opens where shop is started, or in DIR; the other lazi tabs keep their folders until
+    // closed.
     restore: true,
     panels: [
         Lazi(config: None, dir: None),
@@ -58,7 +59,7 @@
     // to the focused panel.
     //   Next, Prev: the neighbouring panel, wrapping. (lazi binds H and L to its own.)
     //   Focus(n): the tab at position n, from 0; the tab bar numbers them from 1.
-    //   Quit: quit shop. lazi's q closes a lazi tab, and quits shop on the last one.
+    //   Quit: quit shop. lazi's q closes a lazi tab, and quits shop on tab 1.
     keys: {
         "1": Focus(0), "2": Focus(1), "3": Focus(2), "4": Focus(3), "5": Focus(4),
         "6": Focus(5), "7": Focus(6), "8": Focus(7), "9": Focus(8),

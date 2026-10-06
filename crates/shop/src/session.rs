@@ -1,9 +1,10 @@
 //! Which tabs were open when shop last quit, so the next start can bring them back, like emacs's
-//! desktop-save. Saved as plain lines in $XDG_STATE_HOME/shop/session: `focus N`, then one
-//! `lazi PATH` or panel name per tab.
+//! desktop-save. Saved as plain lines in $XDG_STATE_HOME/shop/session, one `lazi PATH` or panel
+//! name per tab. Tab one, the first lazi tab, isn't really saved: it always opens where shop is
+//! started; the others stay where they were left until closed.
 
 use std::collections::VecDeque;
-use std::{env, fs, io};
+use std::{env, fs, io, mem};
 use std::path::{Path, PathBuf};
 
 use crate::config::PanelSpec;
@@ -19,7 +20,6 @@ pub enum Tab {
 #[derive(Debug, PartialEq)]
 pub struct Session {
     pub tabs: Vec<Tab>,
-    pub focus: usize,
 }
 
 /// $XDG_STATE_HOME/shop/session, else ~/.local/state/shop/session.
@@ -42,7 +42,7 @@ pub fn save(session: &Session) -> io::Result<()> {
 }
 
 pub fn render(session: &Session) -> String {
-    let mut text = format!("focus {}\n", session.focus);
+    let mut text = String::new();
     for tab in &session.tabs {
         match tab {
             Tab::Lazi(dir) => text.push_str(&format!("lazi {}\n", dir.display())),
@@ -55,11 +55,9 @@ pub fn render(session: &Session) -> String {
 /// Reads what `render` wrote. Lines it doesn't know are skipped, so a damaged file costs tabs,
 /// never the start.
 pub fn parse(text: &str) -> Session {
-    let mut session = Session { tabs: Vec::new(), focus: 0 };
+    let mut session = Session { tabs: Vec::new() };
     for line in text.lines() {
-        if let Some(n) = line.strip_prefix("focus ") {
-            session.focus = n.parse().unwrap_or(0);
-        } else if let Some(dir) = line.strip_prefix("lazi ") {
+        if let Some(dir) = line.strip_prefix("lazi ") {
             session.tabs.push(Tab::Lazi(PathBuf::from(dir)));
         } else if !line.is_empty() {
             session.tabs.push(Tab::Other(line.to_owned()));
@@ -69,9 +67,9 @@ pub fn parse(text: &str) -> Session {
 }
 
 /// The tabs to open and which to focus: the saved ones in order, built from the config's panel
-/// settings, with the focused tab (or the first lazi tab, when git had focus) opening `here`.
-/// Lazi tabs whose directory is gone are dropped; panels the config gained since are added at the
-/// end. With nothing saved, it's the config's own layout with its first lazi tab `here`.
+/// settings, with tab one (the first lazi tab) opening `here` and focused. Other lazi tabs whose
+/// directory is gone are dropped; panels the config gained since are added at the end. With
+/// nothing saved, it's the config's own layout.
 pub fn layout(saved: Option<Session>, specs: &[PanelSpec], here: PathBuf, exists: impl Fn(&Path) -> bool) -> (Vec<PanelSpec>, usize) {
     let Some(lazi_config) = specs.iter().find_map(|s| match s {
         PanelSpec::Lazi { config, .. } => Some(config.clone()),
@@ -81,21 +79,19 @@ pub fn layout(saved: Option<Session>, specs: &[PanelSpec], here: PathBuf, exists
         return (specs.to_vec(), 0);
     };
     let mut out = Vec::new();
-    let mut focus = None;
     if let Some(saved) = saved {
         let mut gits: VecDeque<PanelSpec> = specs.iter().filter(|s| matches!(s, PanelSpec::Git(_))).cloned().collect();
-        for (i, tab) in saved.tabs.into_iter().enumerate() {
+        let mut first = true;
+        for tab in saved.tabs {
             let spec = match tab {
-                Tab::Lazi(dir) if exists(&dir) => PanelSpec::Lazi { config: lazi_config.clone(), dir: Some(dir) },
+                // Tab one's folder is about to be replaced by `here`, so it needn't still exist.
+                Tab::Lazi(dir) if mem::take(&mut first) || exists(&dir) => PanelSpec::Lazi { config: lazi_config.clone(), dir: Some(dir) },
                 Tab::Other(name) if name == "git" => match gits.pop_front() {
                     Some(git) => git,
                     None => continue,
                 },
                 _ => continue,
             };
-            if i == saved.focus {
-                focus = Some(out.len());
-            }
             out.push(spec);
         }
         out.extend(gits);
@@ -103,16 +99,12 @@ pub fn layout(saved: Option<Session>, specs: &[PanelSpec], here: PathBuf, exists
     if !out.iter().any(|s| matches!(s, PanelSpec::Lazi { .. })) {
         // Nothing usable was saved: the config's layout.
         out = specs.to_vec();
-        focus = None;
     }
-    let focus = match focus {
-        Some(i) if matches!(out[i], PanelSpec::Lazi { .. }) => i,
-        _ => out.iter().position(|s| matches!(s, PanelSpec::Lazi { .. })).unwrap_or(0),
-    };
-    if let PanelSpec::Lazi { dir, .. } = &mut out[focus] {
+    let one = out.iter().position(|s| matches!(s, PanelSpec::Lazi { .. })).unwrap_or(0);
+    if let PanelSpec::Lazi { dir, .. } = &mut out[one] {
         *dir = Some(here);
     }
-    (out, focus)
+    (out, one)
 }
 
 #[cfg(test)]
@@ -147,23 +139,25 @@ mod tests {
 
     #[test]
     fn a_session_reads_back_what_was_written() {
-        let session = Session { tabs: vec![Tab::Lazi("/a b".into()), Tab::Other("git".into()), Tab::Lazi("/c".into())], focus: 2 };
+        let session = Session { tabs: vec![Tab::Lazi("/a b".into()), Tab::Other("git".into()), Tab::Lazi("/c".into())] };
         assert_eq!(parse(&render(&session)), session);
     }
 
     #[test]
-    fn the_focused_tab_opens_here_and_the_rest_where_they_were() {
-        let saved = Session { tabs: vec![Tab::Lazi("/a".into()), Tab::Lazi("/b".into()), Tab::Other("git".into())], focus: 1 };
+    fn tab_one_opens_here_and_the_rest_where_they_were() {
+        let saved = Session { tabs: vec![Tab::Lazi("/a".into()), Tab::Lazi("/b".into()), Tab::Other("git".into())] };
         let (specs, focus) = layout(Some(saved), &[lazi("/cfg"), git(300)], "/here".into(), |_| true);
-        assert_eq!(shape(&specs), ["lazi /a", "lazi /here", "git 300"]);
-        assert_eq!(focus, 1);
+        assert_eq!(shape(&specs), ["lazi /here", "lazi /b", "git 300"]);
+        assert_eq!(focus, 0);
     }
 
+    /// Tab one's saved folder was only where shop was last started, so it doesn't matter if it's
+    /// gone; another tab's is dropped with it.
     #[test]
-    fn gone_directories_are_dropped_and_git_focus_hands_here_to_the_first_lazi_tab() {
-        let saved = Session { tabs: vec![Tab::Lazi("/gone".into()), Tab::Lazi("/a".into()), Tab::Other("git".into())], focus: 2 };
+    fn gone_directories_drop_their_tabs_but_never_tab_one() {
+        let saved = Session { tabs: vec![Tab::Lazi("/gone".into()), Tab::Lazi("/a".into()), Tab::Lazi("/gone".into()), Tab::Other("git".into())] };
         let (specs, focus) = layout(Some(saved), &[lazi("/cfg"), git(300)], "/here".into(), |p| p != Path::new("/gone"));
-        assert_eq!(shape(&specs), ["lazi /here", "git 300"]);
+        assert_eq!(shape(&specs), ["lazi /here", "lazi /a", "git 300"]);
         assert_eq!(focus, 0);
     }
 
@@ -176,8 +170,9 @@ mod tests {
 
     #[test]
     fn panels_new_to_the_config_are_added_after_the_saved_ones() {
-        let saved = Session { tabs: vec![Tab::Lazi("/a".into()), Tab::Other("git".into())], focus: 0 };
+        let saved = Session { tabs: vec![Tab::Lazi("/a".into()), Tab::Other("git".into())] };
         let (specs, _) = layout(Some(saved), &[lazi("/cfg"), git(300), git(60)], "/here".into(), |_| true);
         assert_eq!(shape(&specs), ["lazi /here", "git 300", "git 60"]);
     }
+
 }

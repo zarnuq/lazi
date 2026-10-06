@@ -254,7 +254,7 @@ impl Shop {
                 None => session::Tab::Other(p.name().to_owned()),
             })
             .collect();
-        session::Session { tabs, focus: self.focus }
+        session::Session { tabs }
     }
 }
 
@@ -276,8 +276,9 @@ fn answer(term: &mut DefaultTerminal, shop: &mut Shop, outcome: Outcome) -> io::
         Outcome::NextTab => focus(term, shop, (shop.focus + 1) % len)?,
         Outcome::PrevTab => focus(term, shop, (shop.focus + len - 1) % len)?,
         Outcome::Quit => {
-            // q closes a lazi tab; only the last one takes shop with it.
-            if shop.panels.iter().filter(|p| matches!(p, Panel::Lazi(_))).count() < 2 {
+            // q on tab one (the first lazi tab, the one that follows where shop starts) quits;
+            // on any other lazi tab it closes just that tab.
+            if shop.panels.iter().position(|p| matches!(p, Panel::Lazi(_))) == Some(shop.focus) {
                 return Ok(Some(Exit::Quit));
             }
             shop.panels[shop.focus].hide(term.backend_mut())?;

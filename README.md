@@ -29,8 +29,8 @@ shop [DIR] [--cwd-file PATH] [--config PATH]
 ```
 
 The number keys pick a tab (the tab bar numbers them), and `Ctrl+c` quits. In the file browser `t`
-opens another tab in the same folder, `H`/`L` move between tabs, and `q` closes a tab (quitting
-shop on the last). Every lazi tab shares one copy/cut register, so `y` in one and `p` in another
+opens another tab in the same folder, `H`/`L` move between tabs, and `q` closes a tab (on tab 1
+it quits shop). Every lazi tab shares one copy/cut register, so `y` in one and `p` in another
 works.
 `DIR` is where the file browser starts. `--config` is shop's `host.ron`; lazi's own settings
 are always `config.ron` (below).
@@ -48,8 +48,9 @@ l() {
 }
 ```
 
-With `restore: true` in `host.ron`, shop reopens the tabs it had when it last quit (kept in
-`~/.local/state/shop/session`); the tab that had focus opens where you started shop, or in `DIR`.
+Tab 1 always opens where you start shop (or in `DIR`), and `q` there quits. Other file-browser
+tabs are kept: with `restore: true` in `host.ron` they reopen in the folder you left them in
+(saved in `~/.local/state/shop/session`) until you close them with `q`.
 
 `--bench` prints the time to the first complete frame and exits.
 
@@ -189,6 +190,6 @@ These are the bindings in the example `config.ron`.
 | `cc` `cd` `cf` `cn` | Copy path / directory / file name / name without extension |
 | `J` `K` | Scroll the preview, or turn a PDF's pages |
 | `^z` | Suspend |
-| `q` / `Q` | Close the tab (quit on the last) / quit without writing the cwd file |
+| `q` / `Q` | Close the tab (on tab 1: quit) / quit without writing the cwd file |
 
 Actions act on the selection if there is one, else on the hovered entry.
