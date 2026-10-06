@@ -138,7 +138,7 @@ impl Lazi {
     /// Takes lazi's image off the screen while another panel has it. The terminal keeps the
     /// image data, so coming back doesn't resend it.
     pub fn hide(&mut self, out: &mut impl Write) -> io::Result<()> {
-        self.app.kitty.sync(out, None)
+        self.app.kitty.hide(out)
     }
 
     /// Deletes every image, before the terminal is restored on exit.

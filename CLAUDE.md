@@ -18,7 +18,8 @@ cargo run --release -p lazi -- --config crates/lazi/config.ron --bench   # time 
 cargo clippy --workspace   # keep it warning-free
 ```
 
-lazi has no tests; shop has one for key routing. Check behaviour by running it.
+Tests are few: kitty image tracking in lazi, key routing in shop (`cargo test --workspace`).
+Check behaviour by running it.
 
 ## Layout
 

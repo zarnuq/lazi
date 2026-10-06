@@ -50,6 +50,18 @@ impl Kitty {
         Ok(())
     }
 
+    /// Takes the image off the screen while another panel has it, data too: that panel may
+    /// `clear` every image in the terminal meanwhile, so what this one remembers sending can't
+    /// be trusted. Coming back costs one resend.
+    pub fn hide(&mut self, out: &mut impl Write) -> io::Result<()> {
+        if let Some(id) = self.sent {
+            // Uppercase I: drop the placement and the data.
+            write!(out, "\x1b_Ga=d,d=I,i={id},q=2\x1b\\")?;
+        }
+        *self = Self::default();
+        Ok(())
+    }
+
     /// Deletes every image, e.g. before handing the terminal to another program.
     pub fn clear(&mut self, out: &mut impl Write) -> io::Result<()> {
         *self = Self::default();
@@ -82,4 +94,24 @@ fn base64(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Another panel's `clear` deletes every image in the terminal, so a hidden panel must not
+    /// trust that its image data is still there when it's shown again.
+    #[test]
+    fn showing_after_hide_resends_the_image() {
+        let img = Image { id: u32::MAX, width: 1, height: 1, rgba: vec![0; 4], paged: false };
+        let mut kitty = Kitty::default();
+        let mut out = Vec::new();
+        kitty.sync(&mut out, Some((&img, 0, 0))).unwrap();
+        kitty.hide(&mut out).unwrap();
+        out.clear();
+        kitty.sync(&mut out, Some((&img, 0, 0))).unwrap();
+        let _ = fs::remove_file(env::temp_dir().join(format!("lazi-tty-graphics-protocol-{}-{}", process::id(), img.id)));
+        assert!(String::from_utf8_lossy(&out).contains("a=t,"), "image was placed without being sent again");
+    }
 }
