@@ -4,35 +4,36 @@ Guidance for working in this repo. Keep it short and current; delete anything th
 
 ## What this is
 
-**shop** — a terminal workspace in Rust (ratatui + crossterm), one tab at a time. Its main tab
-is **lazi**, a yazi/ranger-style file manager library (`crates/lazi`, no binary of its own):
+**lazi** — a terminal workspace in Rust (ratatui + crossterm), one tab at a time. Its main tab
+is **files**, a yazi/ranger-style file manager library (`crates/files`, no binary of its own):
 three columns, vim keys, previews (syntect highlighting, kitty-graphics images, command output),
-inotify live updates. Linux only. Configured from a RON file (`crates/lazi/config.ron` is the
-reference) with no built-in defaults: every option, key, previewer and opener comes from it.
+inotify live updates. Linux only. Configured from RON files (`crates/lazi/config.ron` and
+`crates/files/files.ron` are the references) with no built-in defaults: every option, key,
+previewer and opener comes from them.
 
 ## Build / run
 
 ```sh
 cargo build --release      # profile: fat LTO, 1 codegen unit, stripped, unwinding
-cargo run -p shop -- --config crates/shop/host.ron [DIR]   # needs a real terminal; drive it in tmux otherwise
-cargo run --release -p shop -- --config crates/shop/host.ron --bench   # time to the first complete frame
+cargo run -p lazi -- --config crates/lazi/config.ron [DIR]   # needs a real terminal; drive it in tmux otherwise
+cargo run --release -p lazi -- --config crates/lazi/config.ron --bench   # time to the first complete frame
 cargo clippy --workspace   # keep it warning-free
 ```
 
-Tests are few: kitty image tracking in lazi; key routing, git status parsing, repo discovery
-and the reference `host.ron` in shop (`cargo test --workspace`).
+Tests are few: kitty image tracking in files; key routing, git status parsing, repo discovery,
+session layout and the reference `config.ron` in lazi (`cargo test --workspace`).
 Check behaviour by running it.
 
 ## Layout
 
-lazi lives in `crates/lazi/src/`:
+The file browser lives in `crates/files/src/`:
 
-- `lib.rs` — `Lazi`, lazi as a panel shop drives: key dispatch (`Lazi::key` →
+- `lib.rs` — `Files`, the file browser as a panel lazi drives: key dispatch (`Files::key` →
   `config::lookup` → `apply`), prompt and `O`-menu key handling, drawing into a `Rect`.
 - `config.rs` — the config schema (serde structs, read with `ron`), loading into a static
   (`config::get()`), key-name parsing, and `lookup` for multi-key sequences. New features
   usually add an `Action` variant here, a match arm in `apply` (`lib.rs`), and a binding in
-  `config.ron`. New options are required fields: add them to `config.ron` too.
+  `files.ron`. New options are required fields: add them to `files.ron` too.
 - `app.rs` — `App` state: cwd, cursor, listing cache, selection, yank, prompts, filter,
   find, history, background tasks, preview requests. Most logic lives here.
 - `fs.rs` — `Listing` (sorted dirs-first, case-insensitive; freshness by mtime plus an
@@ -53,33 +54,33 @@ lazi lives in `crates/lazi/src/`:
 - `ui.rs` — drawing: header, three columns, status line/prompts, opener menu.
 - `input.rs` — single-line readline-style input for prompts.
 
-## shop
+## lazi
 
-`crates/shop` is the program: args (`[DIR] --cwd-file --config --bench`, which the zsh `y`
-wrapper relies on), the event loop, and one panel at a time. Panels: lazi (via `lazi::Lazi` in
-`crates/lazi/src/lib.rs`) and git (`git.rs`: repos found under configured roots, down to `depth` levels, with zhimmer's
+`crates/lazi` is the program: args (`[DIR] --cwd-file --config --bench`, which the zsh `y`
+wrapper relies on), the event loop, and one panel at a time. Panels: files (via `files::Files` in
+`crates/files/src/lib.rs`) and git (`git.rs`: repos found under configured roots, down to `depth` levels, with zhimmer's
 status symbols, a worker thread for `git status`/`git fetch`, inotify on each `.git`;
 `status.rs` holds the pure parser and discovery the tests cover). `dashboard.rs` is the home tab: configured shortcuts above the recently opened files
-(lazi reports what its openers opened through `Lazi::take_opened`). `session.rs` saves the tabs
-on exit and lays them out again on start (`restore` in `host.ron`), and keeps the visited-folder
+(files reports what its openers opened through `Files::take_opened`). `session.rs` saves the tabs
+on exit and lays them out again on start (`restore` in `config.ron`), and keeps the visited-folder
 and opened-file lists. `search.rs` is the Ctrl+p popup: pure query/regex/rg-parsing helpers (tested), plus fd
-and rg on threads that stream results back through the popup's eventfd. Its config is `host.ron`
-(`crates/shop/host.ron` is the reference). Keys go to shop's sequence map first and fall
-through to the focused panel when nothing there starts with them, so shop's bindings live
+and rg on threads that stream results back through the popup's eventfd. Its config is `config.ron`
+(`crates/lazi/config.ron` is the reference). Keys go to lazi's sequence map first and fall
+through to the focused panel when nothing there starts with them, so lazi's bindings live
 on keys the panels don't use (the number keys, `Ctrl+c`), and stand aside entirely while a
-panel takes text (`Panel::wants_text`: a lazi prompt or opener menu). lazi's `t`/`H`/`L`/`q` ask shop
-for tab changes through `Outcome`; every lazi tab shares one yank register (a static in `app.rs`). New panels are a `Panel` variant in
+panel takes text (`Panel::wants_text`: a files prompt or opener menu). The files tab's `t`/`H`/`L`/`q` ask lazi
+for tab changes through `Outcome`; every files tab shares one yank register (a static in `app.rs`). New panels are a `Panel` variant in
 `panel.rs` plus a `PanelSpec` variant in `config.rs`.
 
 ```sh
-cargo test -p shop          # routing, status parsing, discovery, the reference host.ron
+cargo test -p lazi          # routing, status parsing, discovery, the reference config.ron
 ```
 
 ## Conventions & gotchas
 
 - **No idle wakeups.** The main loop sleeps in `wake::wait`; anything that produces work
   for it from another thread must go through `Notifier::send` (which pokes the eventfd),
-  never a timer or polling loop. The one periodic thing is shop's git ticker
+  never a timer or polling loop. The one periodic thing is lazi's git ticker
   thread, which wakes the loop once per `fetch_every` to start a fetch round.
 - **Workers never block the UI.** Directory reads, previews and file operations happen off
   the main thread and come back as `Msg`. Only the initial cwd read is inline.
@@ -94,7 +95,7 @@ cargo test -p shop          # routing, status parsing, discovery, the reference 
 - **Commits:** imperative subject; the body explains what changed and why, with numbers
   where they matter (timings, costs).
 - Removing a feature is common. Delete it outright, including its `Action`, its bindings in
-  `config.ron` and any helpers it alone used. Also update the key table in `README.md`.
-- The Gentoo ebuild is `app-misc/shop/shop-9999.ebuild` in `../gentoo-overlay`. If the
-  minimum Rust version goes up, update `RUST_MIN_VER` there. It installs `host.ron` to
-  `/etc/xdg/shop/` and lazi's `config.ron` to `/etc/xdg/lazi/`.
+  `files.ron` or `config.ron` and any helpers it alone used. Also update the key table in `README.md`.
+- The Gentoo ebuild is `app-misc/lazi/lazi-9999.ebuild` in `../gentoo-overlay`. If the
+  minimum Rust version goes up, update `RUST_MIN_VER` there. It installs `config.ron` and
+  `files.ron` to `/etc/xdg/lazi/`.

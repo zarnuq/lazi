@@ -14,8 +14,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::{env, mem, thread};
 
 use fancy_regex::Regex;
-use lazi::wake::{self, Waker};
-use lazi::{Key, Lookup};
+use files::wake::{self, Waker};
+use files::{Key, Lookup};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
@@ -45,7 +45,7 @@ pub fn split(query: &str) -> (Scope, &str) {
     (Scope::All, query)
 }
 
-/// The query as a regex: case-insensitive unless it has a capital, like lazi's find and rg's
+/// The query as a regex: case-insensitive unless it has a capital, like the files tab's find and rg's
 /// --smart-case. None when empty, since an empty query would match everything.
 pub fn compile(pattern: &str) -> Result<Option<Regex>, String> {
     if pattern.is_empty() {
@@ -115,13 +115,13 @@ impl Hit {
     }
 }
 
-/// What the popup asks shop to do after a key.
+/// What the popup asks lazi to do after a key.
 pub enum Done {
     Stay,
     Close,
-    /// Open the hit: a file in the editor, a folder or repo in lazi.
+    /// Open the hit: a file in the editor, a folder or repo in files.
     Open(Hit),
-    /// Show the hit in lazi instead.
+    /// Show the hit in files instead.
     Reveal(Hit),
 }
 
@@ -246,12 +246,12 @@ impl Search {
 
     pub fn key(&mut self, key: Key) -> Done {
         self.pending.push(key);
-        let action = match lazi::lookup(&self.spec.keys, &self.pending) {
+        let action = match files::lookup(&self.spec.keys, &self.pending) {
             Lookup::Pending => return Done::Stay,
             Lookup::Action(action) => action.clone(),
             Lookup::Unbound => {
                 self.pending.clear();
-                // Unbound printable keys type, as in lazi's prompts.
+                // Unbound printable keys type, as in the files tab's prompts.
                 if let (KeyCode::Char(c), mods) = key
                     && !mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
                 {
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn a_prefix_narrows_the_scope() {
-        assert_eq!(split("repo:lazi"), (Scope::Repos, "lazi"));
+        assert_eq!(split("repo:files"), (Scope::Repos, "files"));
         assert_eq!(split("dir:notes"), (Scope::Dirs, "notes"));
         assert_eq!(split("file:\\.ron$"), (Scope::Files, "\\.ron$"));
         assert_eq!(split("content:TODO"), (Scope::Content, "TODO"));

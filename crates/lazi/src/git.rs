@@ -12,9 +12,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 use std::{env, mem, slice, thread};
 
-use lazi::wake::{self, Waker};
-use lazi::watch::Watcher;
-use lazi::{Cmd, Key, Lookup, Outcome};
+use files::wake::{self, Waker};
+use files::watch::Watcher;
+use files::{Cmd, Key, Lookup, Outcome};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -200,7 +200,7 @@ impl Git {
             repo.run_error = None;
         }
         self.pending.push(key);
-        let action = match lazi::lookup(&self.spec.keys, &self.pending) {
+        let action = match files::lookup(&self.spec.keys, &self.pending) {
             Lookup::Pending => return Ok(Outcome::Continue),
             Lookup::Unbound => {
                 self.pending.clear();
@@ -231,7 +231,7 @@ impl Git {
                         notify.send(Msg::Failed(failed, msg));
                     });
                     let cmd = Cmd { desc: &run, script: &run, args: slice::from_ref(path), block };
-                    let err = lazi::run(term, &cmd, path, on_fail)?;
+                    let err = files::run(term, &cmd, path, on_fail)?;
                     if let Some(repo) = self.repos.get_mut(path) {
                         repo.run_error = err;
                     }
@@ -257,7 +257,7 @@ impl Git {
 
     /// Every binding, as (keys, action), for the help menu.
     pub fn help(&self) -> Vec<(String, String)> {
-        self.spec.keys.iter().map(|(keys, action)| (lazi::key_label(keys), format!("{action:?}"))).collect()
+        self.spec.keys.iter().map(|(keys, action)| (files::key_label(keys), format!("{action:?}"))).collect()
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
@@ -531,7 +531,7 @@ fn run(program: &str, args: &[&str], dir: &Path, limit: Duration) -> Result<Stri
     cmd.env("GIT_OPTIONAL_LOCKS", "0");
     // SAFETY: setsid is async-signal-safe and touches no memory of ours. A session of its own
     // leaves git, and ssh under it, without a controlling terminal, so neither can open
-    // /dev/tty to ask for a passphrase or a host key, and Ctrl+C in shop's terminal (during a
+    // /dev/tty to ask for a passphrase or a host key, and Ctrl+C in lazi's terminal (during a
     // blocking Run, say) doesn't reach it. It also makes the child's pid its group's id, which
     // the timeout below kills.
     unsafe {

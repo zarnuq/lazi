@@ -1,6 +1,6 @@
-# shop
+# lazi
 
-A terminal workspace, one tab at a time. Its main tab is **lazi**, a small, fast file manager
+A terminal workspace, one tab at a time. Its main tab is **files**, a small, fast file manager
 in the style of [yazi](https://github.com/sxyazi/yazi) and ranger: three columns (parent,
 current, preview), vim keys, and image previews over kitty's graphics protocol. A **git** tab
 lists every repository under your project folders with zhimmer-style status symbols
@@ -11,29 +11,28 @@ Linux only (inotify, eventfd, memfd).
 
 ## Install
 
-Gentoo: `app-misc/shop` in the [zarnuq overlay](https://github.com/zarnuq/gentoo-overlay).
+Gentoo: `app-misc/lazi` in the [zarnuq overlay](https://github.com/zarnuq/gentoo-overlay).
 
 From source (Rust 1.88+):
 
 ```sh
-cargo install --path crates/shop
-mkdir -p ~/.config/shop ~/.config/lazi
-cp crates/shop/host.ron ~/.config/shop/
-cp crates/lazi/config.ron ~/.config/lazi/
+cargo install --path crates/lazi
+mkdir -p ~/.config/lazi
+cp crates/lazi/config.ron crates/files/files.ron ~/.config/lazi/
 ```
 
 ## Usage
 
 ```sh
-shop [DIR] [--cwd-file PATH] [--config PATH]
+lazi [DIR] [--cwd-file PATH] [--config PATH]
 ```
 
 The number keys pick a tab (the tab bar numbers them), and `Ctrl+c` quits. In the file browser `t`
 opens another tab in the same folder, `H`/`L` move between tabs, and `q` closes a tab (on tab 1
-it quits shop). Every lazi tab shares one copy/cut register, so `y` in one and `p` in another
+it quits lazi). Every files tab shares one copy/cut register, so `y` in one and `p` in another
 works.
-`DIR` is where the file browser starts. `--config` is shop's `host.ron`; lazi's own settings
-are always `config.ron` (below).
+`DIR` is where the file browser starts. `--config` is lazi's `config.ron`; the file browser's settings
+are `files.ron` (below).
 
 `--cwd-file` writes the directory the file browser was in when you quit with `q` or `Ctrl+c`
 (not `Q`). A shell wrapper to follow it:
@@ -41,16 +40,16 @@ are always `config.ron` (below).
 ```sh
 l() {
     local tmp="$(mktemp)"
-    shop --cwd-file "$tmp" "$@"
+    lazi --cwd-file "$tmp" "$@"
     local dir="$(cat "$tmp")"
     rm -f "$tmp"
     [ -n "$dir" ] && [ "$dir" != "$PWD" ] && cd "$dir"
 }
 ```
 
-Tab 1 always opens where you start shop (or in `DIR`), and `q` there quits. Other file-browser
-tabs are kept: with `restore: true` in `host.ron` they reopen in the folder you left them in
-(saved in `~/.local/state/shop/session`) until you close them with `q`.
+Tab 1 always opens where you start lazi (or in `DIR`), and `q` there quits. Other file-browser
+tabs are kept: with `restore: true` in `config.ron` they reopen in the folder you left them in
+(saved in `~/.local/state/lazi/session`) until you close them with `q`.
 
 `--bench` prints the time to the first complete frame and exits.
 
@@ -60,21 +59,21 @@ tabs are kept: with `restore: true` in `host.ron` they reopen in the folder you 
 repos (from the git tab), folders you've visited, file names and file contents under the
 focused tab's folder, and shows them grouped, content matches under their file. The query is an
 exact regex, case-insensitive unless it has a capital, and reaches hidden files (dotfiles) except
-the `exclude` globs in `host.ron`; `repo:`, `dir:`, `file:` or `content:`
+the `exclude` globs in `config.ron`; `repo:`, `dir:`, `file:` or `content:`
 narrows it to one source. `Enter` opens a file in `$EDITOR` (at the matching line) or goes to a
 folder; `Ctrl+r` shows the file in the file browser instead. Needs `fd` and `rg`.
 
 ## The home tab
 
-A start page like Doom Emacs's dashboard: a menu of shortcuts from `host.ron`, each on its own
+A start page like Doom Emacs's dashboard: a menu of shortcuts from `config.ron`, each on its own
 key (open a project, search, go to a folder, edit a config file), and below it the files opened
 last from the file browser, the search box or the menu (kept across runs in
-`~/.local/state/shop/files`), then the folders visited last. `Enter` opens a file in `$EDITOR`
+`~/.local/state/lazi/files`), then the folders visited last. `Enter` opens a file in `$EDITOR`
 or a folder in the file browser; `Ctrl+r` shows either in the file browser, the cursor on it.
 
 ## The git tab
 
-Configured in `host.ron` (see [`crates/shop/host.ron`](crates/shop/host.ron)): the folders
+Configured in `config.ron` (see [`crates/lazi/config.ron`](crates/lazi/config.ron)): the folders
 whose direct subdirectories are repositories, how often to fetch, the symbols and colours, and
 the keys. `Enter` opens a repo in the file browser; `Run` bindings run a command in it, with
 its path as `$1`, either taking over the terminal (`git pull`, lazygit) or in the background (a
@@ -82,11 +81,12 @@ new terminal window). Status updates as soon as a commit, checkout or pull happe
 
 ## Configuration
 
-The file browser reads the first of `$XDG_CONFIG_HOME/lazi/config.ron` (usually
+lazi reads the first of `$XDG_CONFIG_HOME/lazi/config.ron` (usually
 `~/.config/lazi/config.ron`) and `$XDG_CONFIG_DIRS/lazi/config.ron` (usually
-`/etc/xdg/lazi/config.ron`). There are no built-in defaults: every setting is required, an
+`/etc/xdg/lazi/config.ron`) for its tabs, keys and search, and `files.ron` from the same places
+for the file browser. There are no built-in defaults: every setting is required, an
 unbound key does nothing, and lazi refuses to start without a config, or with a mistake in
-it, naming the line. Start from [`config.ron`](crates/lazi/config.ron), which documents every option.
+it, naming the line. Start from [`files.ron`](crates/files/files.ron), which documents every option.
 
 The file is [RON](https://github.com/ron-rs/ron). It covers:
 
@@ -200,7 +200,7 @@ These are the bindings in the example `config.ron`.
 | `a` | Create a file, or a directory if the name ends in `/` |
 | `r` | Rename |
 | `/` | Find; `Tab` completes and moves into directories, `S-Tab` steps through matches |
-| `?` | Every key binding of the current tab and shop's own |
+| `?` | Every key binding of the current tab and lazi's own |
 | `n` `N` | Next / previous match |
 | `f` | Filter the listing |
 | `Esc` | Clear the selection, else the filter, else the find highlight |

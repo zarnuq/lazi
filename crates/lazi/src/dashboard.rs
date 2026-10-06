@@ -1,10 +1,10 @@
 //! The start page, like Doom Emacs's dashboard: a menu of shortcuts (search for a project, go
 //! to a folder, edit a file), then the files opened and the folders visited most recently.
-//! Nothing runs in the background; shop hands it both lists before each frame.
+//! Nothing runs in the background; lazi hands it both lists before each frame.
 
 use std::path::PathBuf;
 
-use lazi::{Key, Lookup, Outcome};
+use files::{Key, Lookup, Outcome};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -30,7 +30,7 @@ enum Entry<'a> {
 pub struct Dashboard {
     spec: DashSpec,
     keys: Vec<(Vec<Key>, Bind)>,
-    /// Newest first, already capped at `recent`; set by shop before each frame.
+    /// Newest first, already capped at `recent`; set by lazi before each frame.
     pub files: Vec<PathBuf>,
     pub folders: Vec<PathBuf>,
     /// Over the menu items, then the files, then the folders.
@@ -42,13 +42,13 @@ impl Dashboard {
     pub fn new(spec: DashSpec) -> Result<Self, String> {
         let mut keys = Vec::new();
         for (i, item) in spec.menu.iter().enumerate() {
-            keys.push((lazi::sequence(&item.key).map_err(|e| format!("dashboard menu: {e}"))?, Bind::Item(i)));
+            keys.push((files::sequence(&item.key).map_err(|e| format!("dashboard menu: {e}"))?, Bind::Item(i)));
         }
         keys.extend(spec.keys.iter().map(|(k, a)| (k.clone(), Bind::Action(a.clone()))));
-        // As `lazi::sequences` checks within a map: a binding that starts another would hide it.
+        // As `files::sequences` checks within a map: a binding that starts another would hide it.
         for (i, (a, _)) in keys.iter().enumerate() {
             if keys.iter().enumerate().any(|(j, (b, _))| i != j && b.starts_with(a)) {
-                return Err(format!("dashboard: \"{}\" is bound twice, or hides a longer binding", lazi::key_label(a)));
+                return Err(format!("dashboard: \"{}\" is bound twice, or hides a longer binding", files::key_label(a)));
             }
         }
         Ok(Self { spec, keys, files: Vec::new(), folders: Vec::new(), cursor: 0, pending: Vec::new() })
@@ -61,7 +61,7 @@ impl Dashboard {
 
     pub fn key(&mut self, key: Key) -> Outcome {
         self.pending.push(key);
-        let bind = match lazi::lookup(&self.keys, &self.pending) {
+        let bind = match files::lookup(&self.keys, &self.pending) {
             Lookup::Pending => return Outcome::Continue,
             Lookup::Unbound => {
                 self.pending.clear();
@@ -126,7 +126,7 @@ impl Dashboard {
     /// Every binding, menu items by their labels, for the help menu.
     pub fn help(&self) -> Vec<(String, String)> {
         let menu = self.spec.menu.iter().map(|item| (item.key.clone(), item.label.clone()));
-        menu.chain(self.spec.keys.iter().map(|(keys, action)| (lazi::key_label(keys), format!("{action:?}")))).collect()
+        menu.chain(self.spec.keys.iter().map(|(keys, action)| (files::key_label(keys), format!("{action:?}")))).collect()
     }
 
     /// One centred column: the menu with its keys right-aligned, then the recent files and

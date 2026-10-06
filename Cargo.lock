@@ -283,6 +283,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "files"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "libc",
+ "ratatui",
+ "ron",
+ "serde",
+ "signal-hook",
+ "syntect",
+ "two-face",
+]
+
+[[package]]
 name = "flate2"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -429,14 +443,12 @@ dependencies = [
 name = "lazi"
 version = "0.1.0"
 dependencies = [
- "image",
+ "fancy-regex",
+ "files",
  "libc",
  "ratatui",
  "ron",
  "serde",
- "signal-hook",
- "syntect",
- "two-face",
 ]
 
 [[package]]
@@ -874,18 +886,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
-]
-
-[[package]]
-name = "shop"
-version = "0.1.0"
-dependencies = [
- "fancy-regex",
- "lazi",
- "libc",
- "ratatui",
- "ron",
- "serde",
 ]
 
 [[package]]

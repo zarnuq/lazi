@@ -1,369 +1,123 @@
-// lazi's configuration. lazi reads the first of $XDG_CONFIG_HOME/lazi/config.ron (usually
-// ~/.config/lazi/config.ron) and $XDG_CONFIG_DIRS/lazi/config.ron (usually /etc/xdg), or the
-// file given with --config. Nothing has a built-in default: every setting below is required,
-// and an unbound key does nothing.
-//
-// The syntax is RON: (field: value) for structs, [a, b] for lists, {"key": value} for maps,
-// Name or Name(args) for choices. r#"..."# is a raw string, which saves escaping quotes in shell
-// snippets.
+// lazi's reference config. lazi reads the first of --config PATH, $XDG_CONFIG_HOME/lazi/config.ron
+// and $XDG_CONFIG_DIRS/lazi/config.ron. Every field is required; there are no built-in defaults.
 (
-    show_hidden: true,
-    // Order after directories, which always come first: Name, Size (biggest first), Mtime
-    // (newest first) or Ext; `reverse` flips it. Ties go by name.
-    sort: (by: Name, reverse: false),
-    // Width ratio of the parent, current and preview columns.
-    ratio: (2, 5, 8),
-    // Rows kept between the cursor and the edge when scrolling.
-    scrolloff: 5,
-    // Ask before trashing. Permanent deletes always ask.
-    confirm_trash: true,
-    // Colours for code previews: one of syntect's bundled themes, i.e. base16-ocean.dark,
-    // base16-eighties.dark, base16-mocha.dark, base16-ocean.light, InspiredGitHub,
-    // Solarized (dark) or Solarized (light).
-    syntax_theme: "base16-ocean.dark",
-    // Columns per tab stop in text previews.
-    tab_size: 5,
-    // Largest image size (pixels) sent to the terminal, whatever the preview area.
-    image_max: (2500, 1500),
-    // Preview commands running longer than this many seconds are killed.
-    preview_timeout: 3.0,
-    // Reads text on stdin, for CopyPath. [] disables copying.
-    clipboard: ["wl-copy"],
-    // Trashes files on another filesystem than the home trash; the path is the last argument.
-    // [] makes that an error instead.
-    trash_fallback: ["gio", "trash", "--"],
-
-    // Each style takes fg and bg (a name like "blue" or "lightred", "#rrggbb", or a 256-colour
-    // index like "208") and bold, dim, italic, underlined, reversed. Unset is the terminal's.
-    style: (
-        header: (fg: "green", bold: true),
-        dir: (fg: "blue", bold: true),
-        link: (fg: "cyan"),
-        cursor: (reversed: true),
-        error: (fg: "red"),
-        dim: (dim: true),
-        find: (fg: "yellow", underlined: true),
-        // The bar left of a marked entry.
-        mark_selected: (bg: "yellow"),
-        mark_copied: (bg: "green"),
-        mark_cut: (bg: "red"),
-        // Names of plain files by lowercase extension, the first match winning; others keep
-        // the terminal's colour. Directories and links use `dir` and `link` above.
-        files: [
-            (ext: ["zip", "tar", "gz", "tgz", "bz2", "xz", "txz", "zst", "7z", "rar", "iso", "cpio", "lz4", "deb", "rpm"], style: (fg: "red")),
-            (ext: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "svg", "avif", "heic", "ico", "jxl"], style: (fg: "yellow")),
-            (ext: ["mp4", "mkv", "webm", "mov", "avi", "m4v", "flv", "wmv", "mp3", "flac", "ogg", "opus", "wav", "m4a", "aac", "wma"], style: (fg: "magenta")),
-            (ext: ["pdf", "epub", "djvu", "doc", "docx", "odt", "xls", "xlsx", "ods", "ppt", "pptx", "odp"], style: (fg: "cyan")),
-        ],
-    ),
-
-    // Glyphs before each name, from a Nerd Font. Each gets one cell plus a space after it;
-    // kitty draws an icon followed by a space across both cells. An icon is "glyph", or ("glyph", "colour") with a colour as in `style`; without
-    // one it takes the name's colour. A directory gets its entry in `dirs`, else `dir`; a file
-    // its entry in `files` (exact names), else in `exts` (lowercase), else `link` or `file`.
-    // `icons: None` draws names alone. Nerd Fonts' icon sets are drawn at different sizes:
-    // directories use yazi's glyphs, which are larger, and files Material Design's, which share
-    // one size.
-    icons: (
-        dir: "",
-        link: "󱅷",
-        file: "󰈔",
-        dirs: {
-            ".config": "",
-            ".git": "",
-            "Documents": "",
-            "Downloads": "",
-            "Music": "",
-            "Pictures": "",
-            "Videos": "",
-        },
-        files: {
-            ".gitignore": ("󰊢", "#fab387"),
-            ".gitmodules": ("󰊢", "#fab387"),
-            ".gitconfig": ("󰊢", "#fab387"),
-            "Makefile": ("󱁻", "#7f849c"),
-            "Dockerfile": ("󰡨", "#89b4fa"),
-            "CMakeLists.txt": ("󱁻", "#89b4fa"),
-            "LICENSE": ("󰗑", "#f9e2af"),
-            "README.md": ("󱓷", "#cdd6f4"),
-            "package.json": ("󰛷", "#eba0ac"),
-            ".zshrc": ("󰆍", "#a6e3a1"),
-            ".bashrc": ("󰆍", "#a6e3a1"),
-        },
-        exts: {
-            "rs": ("󱘗", "#fab387"),
-            "zig": ("󰈮", "#f9e2af"),
-            "c": ("󰙱", "#89b4fa"),
-            "h": ("󰙱", "#cba6f7"),
-            "cpp": ("󰙲", "#74c7ec"),
-            "go": ("󰟓", "#89dceb"),
-            "py": ("󰌠", "#f9e2af"),
-            "js": ("󰌞", "#f9e2af"),
-            "ts": ("󰛦", "#74c7ec"),
-            "lua": ("󰢱", "#74c7ec"),
-            "sh": ("󱆃", "#7f849c"),
-            "zsh": ("󱆃", "#a6e3a1"),
-            "nix": ("󱄅", "#74c7ec"),
-            "toml": ("󱁻", "#fab387"),
-            "yaml": ("󱁻", "#7f849c"),
-            "yml": ("󱁻", "#7f849c"),
-            "json": ("󰘦", "#f9e2af"),
-            "md": ("󰍔", "#cdd6f4"),
-            "txt": ("󰈙", "#a6e3a1"),
-            "html": ("󰌝", "#fab387"),
-            "css": ("󰌜", "#cba6f7"),
-            "java": ("󰬷", "#eba0ac"),
-            "rb": ("󰴭", "#eba0ac"),
-            "sql": ("󰆼", "#cdd6f4"),
-            "vim": ("󰈮", "#a6e3a1"),
-            "diff": ("󰢪", "#7f849c"),
-            "lock": ("󰌾", "#a6adc8"),
-            "log": ("󰧭", "#cdd6f4"),
-            "conf": ("󱁻", "#7f849c"),
-            "ini": ("󱁻", "#7f849c"),
-            "xml": ("󰗀", "#fab387"),
-            "csv": ("󰈘", "#a6e3a1"),
-            "pdf": ("󰈦", "#eba0ac"),
-            "epub": ("󱓷", "#f9e2af"),
-            "png": ("󰈟", "#cba6f7"),
-            "jpg": ("󰈟", "#cba6f7"),
-            "jpeg": ("󰈟", "#cba6f7"),
-            "gif": ("󰈟", "#cba6f7"),
-            "webp": ("󰈟", "#cba6f7"),
-            "svg": ("󰜡", "#f9e2af"),
-            "mp4": ("󰈫", "#f9e2af"),
-            "mkv": ("󰈫", "#f9e2af"),
-            "webm": ("󰈫", "#f9e2af"),
-            "mp3": ("󰈣", "#74c7ec"),
-            "flac": ("󰈣", "#74c7ec"),
-            "ogg": ("󰈣", "#74c7ec"),
-            "opus": ("󰈣", "#74c7ec"),
-            "wav": ("󰈣", "#74c7ec"),
-            "zip": ("󰗄", "#f9e2af"),
-            "tar": ("󰗄", "#f9e2af"),
-            "gz": ("󰗄", "#f9e2af"),
-            "xz": ("󰗄", "#f9e2af"),
-            "zst": ("󰗄", "#f9e2af"),
-            "7z": ("󰗄", "#f9e2af"),
-            "iso": ("󰗮", "#a6adc8"),
-            "ttf": ("󰛖", "#cdd6f4"),
-            "otf": ("󰛖", "#cdd6f4"),
-            "asc": ("󱆄", "#7f849c"),
-            "pub": ("󰌆", "#f9e2af"),
-            "ebuild": ("󰣨", "#cba6f7"),
-            "qml": ("󰈮", "#a6e3a1"),
-            "desktop": ("󰣆", "#cba6f7"),
-            "docx": ("󰈬", "#89b4fa"),
-            "xlsx": ("󰈛", "#94e2d5"),
-            "pptx": ("󰈧", "#fab387"),
-        },
-    ),
-
-    // Programs to open files with, named for `rules` below. `run` is a `sh -c` snippet with the
-    // files as "$@" ("$1" is the first). `block: true` hands it the terminal and waits; otherwise
-    // it runs detached, and its error shows if it fails.
-    openers: {
-        "shell": (desc: "Shell here", run: r#"cd "$1" && exec "$SHELL""#, block: true),
-        "edit": (desc: "$EDITOR", run: r#"${EDITOR:-nvim} "$@""#, block: true),
-        "open": (desc: "Open", run: r#"xdg-open "$1""#),
-        "reveal": (desc: "Reveal", run: r#"xdg-open "$(dirname "$1")""#),
-        "view": (desc: "View", run: r#"swayimg "$1""#),
-        "setbg": (desc: "Set wallpaper", run: r#"qs ipc call wallpaper set "$1""#),
-        "play": (desc: "Play", run: r#"mpv --force-window "$@""#),
-        "mediainfo": (desc: "Media info", run: r#"mediainfo "$1"; echo "Press enter to exit"; read _"#, block: true),
-        "extract": (desc: "Extract here", run: r#"for f; do bsdtar -xf "$f"; done"#),
-    },
-
-    // Which previewers and openers a file gets. The first matching rule wins. A rule matches on
-    // all of: `dir: true` (directories match only these rules, files only the others), `ext`
-    // (lowercase extensions) and `text: true` (no NUL in the first KB). A rule with none of them
-    // catches every file.
-    //
-    // `preview` is tried in order until one works:
-    //   Text            the file itself, syntax highlighted
-    //   Image           decoded in process, shown with kitty's graphics protocol
-    //   ImageCmd("...") a script printing an image (e.g. PNG) to stdout
-    //   ImagePages("...") the same, printing page $PAGE (from 1); Seek turns pages
-    //   Cmd("...")      a script whose output is shown as text, ANSI colours kept
-    // Scripts get the file as "$1" and the preview area as $COLUMNS and $LINES. Directories are
-    // always previewed as a listing.
-    //
-    // `open` names openers: Open runs the first, OpenWith offers them all.
-    rules: [
-        (dir: true, open: ["shell", "edit", "reveal"]),
-        (
-            ext: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "svg", "avif", "heic", "ico", "jxl"],
-            // ffmpeg handles what the built-in decoder can't (avif, heic, jxl, ...).
-            preview: [Image, ImageCmd(r#"ffmpeg -v error -i "$1" -frames:v 1 -f image2pipe -c:v png -"#)],
-            open: ["view", "setbg", "open", "reveal"],
-        ),
-        (
-            ext: ["pdf"],
-            // The first page, falling back to metadata if poppler is missing or the file is broken.
-            preview: [
-                ImagePages(r#"pdftoppm -png -f "$PAGE" -l "$PAGE" -singlefile -scale-to 1500 "$1""#),
-                Cmd(r#"exiftool -S --File:all --ExifTool:all "$1""#),
+    // Panels in tab order; the first has focus at start.
+    //   Files(config, dir): the file browser. config None reads lazi/files.ron as usual, dir None is
+    //   lazi's working directory. Its config is per process, so a second Files panel uses the first's.
+    //   Git(roots, depth, fetch_every, symbols, style, keys): repos found under each root, with
+    //   zhimmer's status symbols. Keys are the panel's own; Run's $1 is the repo's path.
+    // Reopen the tabs lazi had when it last quit (saved in ~/.local/state/lazi/session). Tab 1
+    // always opens where lazi is started, or in DIR; the other files tabs keep their folders until
+    // closed.
+    restore: true,
+    panels: [
+        Files(config: None, dir: None),
+        // A start page, like Doom Emacs's: these shortcuts, then the files opened last (from the file browser,
+        // the search box or here) and the folders visited last, `recent` of each. Search opens the search box with that query typed; Goto shows
+        // the folder in the file browser; Edit opens the file with search.open.
+        Dashboard(
+            recent: 10,
+            menu: [
+                (key: "p", label: "Open project", run: Search("repo:.")),
+                (key: "s", label: "Search", run: Search("")),
+                (key: "h", label: "Home folder", run: Goto("~")),
+                (key: "c", label: "Open lazi config", run: Edit("~/.config/lazi/config.ron")),
+                (key: "L", label: "Open file browser config", run: Edit("~/.config/lazi/files.ron")),
             ],
-            open: ["open", "reveal"],
+            style: (
+                title: (fg: "#89b4fa", bold: true),
+                key: (fg: "#cba6f7"),
+                cursor: (bg: "#45475a"),
+            ),
+            keys: {
+                "j": Down, "k": Up, "Down": Down, "Up": Up, "g g": Top, "G": Bottom,
+                "Enter": Open, "l": Open, "Ctrl+r": Reveal,
+                "?": Help,
+            },
         ),
-        (
-            ext: ["epub", "djvu"],
-            // Metadata only, without exiftool's own and the filesystem's.
-            preview: [Cmd(r#"exiftool -S --File:all --ExifTool:all "$1""#)],
-            open: ["open", "reveal"],
+        Git(
+            roots: ["~"],
+            // Levels below each root to search; 2 finds ~/Projects/x but not repos kept deeper
+            // (notes, downloads of downloads). Hidden directories and repos inside repos are skipped.
+            depth: 2,
+            // Seconds between background fetch rounds.
+            fetch_every: 300,
+            symbols: (
+                untracked: "?", staged: "+", modified: "!", renamed: "»", deleted: "✘",
+                unmerged: "=", ahead: "⇡", behind: "⇣", clean: "✓",
+            ),
+            style: (
+                root: (fg: "#89b4fa", bold: true),
+                branch: (fg: "#cba6f7"),
+                status: (fg: "#f9e2af"),
+                arrows: (fg: "#fab387"),
+                clean: (fg: "#a6e3a1"),
+                error: (fg: "#f38ba8"),
+                // A background, not reversed: reversing turns every coloured span into a block.
+                cursor: (bg: "#45475a"),
+            ),
+            keys: {
+                "j": Down, "k": Up, "Down": Down, "Up": Up, "g g": Top, "G": Bottom,
+                "Enter": Open, "l": Open,
+                "r": Refresh,
+                "?": Help,
+                "g l": Run(run: "lazygit", block: true),
+                // Everything uncommitted, staged or not, in git's pager; q comes back.
+                "d": Run(run: "git diff HEAD", block: true),
+                "p": Run(run: "git pull --ff-only", block: true),
+                "P": Run(run: "git push", block: true),
+                "t": Run(run: r#"kitty --directory "$1""#, block: false),
+                "c": Run(run: r#"kitty --directory "$1" claude"#, block: false),
+                "x": Run(run: r#"kitty --directory "$1" codex"#, block: false),
+            },
         ),
-        (
-            ext: ["mp4", "mkv", "webm", "mov", "avi", "m4v", "flv", "wmv"],
-            // A representative frame from the first couple of seconds, rather than a black first one.
-            preview: [ImageCmd(r#"ffmpeg -v error -i "$1" -vf thumbnail=50 -frames:v 1 -f image2pipe -c:v png -"#)],
-            open: ["play", "mediainfo", "reveal"],
-        ),
-        (
-            ext: ["mp3", "flac", "ogg", "opus", "wav", "m4a", "aac", "wma"],
-            preview: [Cmd(r#"exiftool -S --File:all --ExifTool:all "$1""#)],
-            open: ["play", "mediainfo", "reveal"],
-        ),
-        (
-            ext: ["zip", "tar", "gz", "tgz", "bz2", "xz", "txz", "zst", "7z", "rar", "iso", "cpio", "lz4"],
-            preview: [Cmd(r#"bsdtar -tf "$1""#)],
-            open: ["extract", "open", "reveal"],
-        ),
-        (text: true, preview: [Text], open: ["edit", "reveal"]),
-        (preview: [Cmd(r#"file -b "$1""#)], open: ["open", "reveal"]),
     ],
-
-    // Keys are written like "q", "Enter", "Ctrl+u", "Shift+PageUp" or "Ctrl+Alt+Left". Modifiers
-    // are Ctrl, Alt, Shift and Super, joined with +. Spaces separate the keys of a sequence
-    // ("g h", "Ctrl+x Ctrl+s"); a run of plain characters like "gg" is a sequence too. Named
-    // keys: Enter Esc Tab BackTab Backspace Delete Insert Home End PageUp PageDown Up Down Left
-    // Right Space F1-F24. A shifted letter is just the capital: "G", not "Shift+g".
-    //
-    // Most terminals never report Super, and some combinations (Ctrl+Shift+letter, Ctrl+Enter)
-    // arrive as something else or not at all.
-    keys: (
-        normal: {
-            "q": Quit,
-            // Without writing --cwd-file, so the shell stays where it was.
-            "Q": QuitNoCwd,
-            "k": Move(-1),
-            "j": Move(1),
-            "Up": Move(-1),
-            "Down": Move(1),
-            // Page moves by a percentage of the visible rows.
-            "Ctrl+u": Page(-50),
-            "Ctrl+d": Page(50),
-            "Ctrl+b": Page(-100),
-            "Ctrl+f": Page(100),
-            "Shift+PageUp": Page(-50),
-            "Shift+PageDown": Page(50),
-            "PageUp": Page(-100),
-            "PageDown": Page(100),
-            "gg": Top,
-            "G": Bottom,
-            "h": Leave,
-            "l": Enter,
-            "Left": Leave,
-            "Right": Enter,
-            // History.
-            "Shift+Tab": Back,
-            "Tab": Forward,
-            // Tabs live in shop: t opens one here, H and L move between them, q closes one
-            // (shop quits on the last).
-            "t": NewTab,
-            "H": PrevTab,
-            "L": NextTab,
-            ".": ToggleHidden,
-            // Name, size, mtime, extension, and round again.
-            "s": CycleSort,
-            "S": ReverseSort,
-            // A leading ~ is $HOME; anything else is relative to the current directory.
-            "gh": Goto("~"),
-            "gc": Goto("~/.config"),
-            "gd": Goto("~/Downloads"),
-            "o": Open,
-            "Enter": Open,
-            "O": OpenWith,
-            // Selects the hovered entry and moves down.
-            "Space": ToggleSelect,
-            "Ctrl+a": SelectAll,
-            "Ctrl+r": InvertSelection,
-            // Clears the selection, else the filter, else the find highlight.
-            "Esc": Escape,
-            "y": Yank,
-            "x": Cut,
-            "Y": Unyank,
-            "X": Unyank,
-            // Paste renames to name_1 on a clash; PasteOverwrite replaces.
-            "p": Paste,
-            "P": PasteOverwrite,
-            "d": Trash,
-            "D": Delete,
-            // A directory if the name ends in /.
-            "a": Create,
-            "r": Rename,
-            "/": Find,
-            "?": Help,
-            "n": FindNext,
-            "N": FindPrev,
-            "f": Filter,
-            // Run is a `sh -c` snippet with the targets as "$@". `block: true` hands it the
-            // terminal; `reveal: true` does too, then goes to the path it prints.
-            "z": Run(run: "fzf", reveal: true),
-            // CopyPath takes Path, Dir, Name or Stem (the name without its extension).
-            "cc": CopyPath(Path),
-            "cd": CopyPath(Dir),
-            "cf": CopyPath(Name),
-            "cn": CopyPath(Stem),
-            "Ctrl+z": Suspend,
-            // Scrolls the file preview by lines, or pages through a PDF.
-            "K": Seek(-5),
-            "J": Seek(5),
-        },
-        // While the OpenWith menu is up. Pick counts from 1.
-        menu: {
-            "j": Down,
-            "Down": Down,
-            "k": Up,
-            "Up": Up,
-            "Enter": Accept,
-            "o": Accept,
-            "l": Accept,
-            "1": Pick(1),
-            "2": Pick(2),
-            "3": Pick(3),
-            "4": Pick(4),
-            "5": Pick(5),
-            "6": Pick(6),
-            "7": Pick(7),
-            "8": Pick(8),
-            "9": Pick(9),
-            "Esc": Cancel,
-            "q": Cancel,
-            "h": Cancel,
-        },
-        // While typing in a prompt (create, rename, find, filter). Unbound printable keys type
-        // themselves. Complete is Tab completion in find, which moves into directories;
-        // NextMatch and PrevMatch step through find's matches without closing the prompt.
-        prompt: {
-            "Enter": Submit,
-            "Esc": Cancel,
-            "Tab": Complete,
-            "Shift+Tab": NextMatch,
-            "Left": Left,
-            "Right": Right,
-            "Home": Home,
-            "Ctrl+a": Home,
-            "End": End,
-            "Ctrl+e": End,
-            "Backspace": Backspace,
-            "Delete": Delete,
-            // Back to the previous space or slash.
-            "Ctrl+w": DeleteWord,
-            "Ctrl+u": KillToStart,
-            "Ctrl+k": KillToEnd,
-        },
-        // Keys that answer yes to a confirmation; anything else is no. The first is shown in
-        // the question.
-        confirm: ["y", "Y"],
+    // Styles are written as in files.ron.
+    style: (
+        tab: (fg: "gray"),
+        tab_focused: (fg: "black", bg: "blue"),
     ),
+    // Keys are written as in files.ron. lazi looks at every key first, except while a panel takes
+    // text (a files prompt or its opener menu); whatever no binding here claims goes to the
+    // focused panel.
+    //   Next, Prev: the neighbouring panel, wrapping. (the files tab binds H and L to its own.)
+    //   Focus(n): the tab at position n, from 0; the tab bar numbers them from 1.
+    //   Quit: quit lazi. q in a files tab closes it, and quits lazi on tab 1.
+    keys: {
+        "1": Focus(0), "2": Focus(1), "3": Focus(2), "4": Focus(3), "5": Focus(4),
+        "6": Focus(5), "7": Focus(6), "8": Focus(7), "9": Focus(8),
+        "Ctrl+c": Quit,
+        "Ctrl+p": Search,
+    },
+    // Ctrl+p's search box: one query, an exact smart-case regex (a capital makes it match case),
+    // over repos, visited folders, file names and file contents under the focused files tab's
+    // folder (from git: the selected repo). repo:, dir:, file: or content: narrows it to one.
+    search: (
+        // $1 is the file; open_line also gets the line as $2.
+        open: r#"${EDITOR:-nvim} "$1""#,
+        open_line: r#"${EDITOR:-nvim} +"$2" "$1""#,
+        // Hidden files are where dotfiles live (~/.config), so they're searched, minus these
+        // globs: git's own store, and caches and app data that would bury everything from ~.
+        hidden: true,
+        exclude: [".git", ".cache", ".local/share", ".local/state", ".cargo", ".rustup", ".npm", ".mozilla", ".zen", "node_modules"],
+        style: (
+            section: (fg: "#89b4fa", bold: true),
+            line_number: (fg: "#6c7086"),
+            cursor: (bg: "#45475a"),
+        ),
+        // Unbound printable keys type into the query.
+        keys: {
+            "Down": Down, "Ctrl+j": Down, "Ctrl+n": Down,
+            "Up": Up, "Ctrl+k": Up,
+            "Enter": Open, "Ctrl+r": Reveal, "Esc": Close,
+            "Backspace": DeleteChar, "Ctrl+w": DeleteWord, "Ctrl+u": Clear,
+        },
+    ),
+    // While the ? menu of key bindings is up. Other keys do nothing.
+    help_keys: {
+        "j": Down, "k": Up, "Down": Down, "Up": Up,
+        "Ctrl+d": PageDown, "Ctrl+u": PageUp, "PageDown": PageDown, "PageUp": PageUp,
+        "g g": Top, "G": Bottom,
+        "Esc": Close, "q": Close, "?": Close,
+    },
 )

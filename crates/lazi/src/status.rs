@@ -84,7 +84,7 @@ fn flag(s: &mut Status, x: char, y: char) {
 
 /// The git repositories under `root`, down to `depth` levels (1 is its direct subdirectories),
 /// grouped by the folder they're in: the root's own first, then each folder's, both sorted
-/// case-insensitively like lazi's listings. A repo is a directory with a `.git` entry (a
+/// case-insensitively like the files tab's listings. A repo is a directory with a `.git` entry (a
 /// directory, or a file for worktrees and submodules). The search doesn't go into a repo, so
 /// submodules and tools cloned inside one stay out, and skips hidden directories, where
 /// `~/.local` and plugin managers keep clones nobody works in. Err only when `root` itself
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn discover_finds_repos_directly_under_the_root() {
-        let root = std::env::temp_dir().join(format!("shop-discover-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("lazi-discover-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         for dir in ["beta/.git", "Alpha/.git", "notes", ".hidden/.git", "deep/inner/.git"] {
             fs::create_dir_all(root.join(dir)).unwrap();
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn watch_dirs_cover_branches_with_slashes() {
-        let repo = std::env::temp_dir().join(format!("shop-watch-{}", std::process::id()));
+        let repo = std::env::temp_dir().join(format!("lazi-watch-{}", std::process::id()));
         let _ = fs::remove_dir_all(&repo);
         fs::create_dir_all(repo.join(".git/refs/heads/feat/deep")).unwrap();
         fs::create_dir_all(repo.join(".git/refs/heads/fix")).unwrap();
@@ -221,11 +221,11 @@ mod tests {
     /// repos (submodules, cloned tools) and anything deeper or hidden are not.
     #[test]
     fn discover_searches_down_to_the_depth() {
-        let root = std::env::temp_dir().join(format!("shop-depth-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("lazi-depth-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         for dir in [
             "dotfiles/.git",
-            "Projects/lazi/.git",
+            "Projects/files/.git",
             "Pictures/bgs/.git",
             "Projects/website/.git",
             "Projects/website/themes/ananke/.git",
@@ -241,11 +241,11 @@ mod tests {
         let found: Vec<String> = found.unwrap().iter().map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().into_owned()).collect();
         // Grouped by folder for the panel's headers: repos right in the root first, then each
         // folder's, both alphabetical.
-        assert_eq!(found, ["dotfiles", "zeta", "Pictures/bgs", "Projects/lazi", "Projects/website"]);
+        assert_eq!(found, ["dotfiles", "zeta", "Pictures/bgs", "Projects/files", "Projects/website"]);
     }
 
     #[test]
     fn discover_fails_on_a_missing_root() {
-        assert!(discover(Path::new("/nonexistent/shop-root"), 2).is_err());
+        assert!(discover(Path::new("/nonexistent/lazi-root"), 2).is_err());
     }
 }

@@ -86,7 +86,7 @@ pub struct Filter {
     entries: Vec<Entry>,
 }
 
-/// The copy/cut register, one per process like yazi's, so every lazi tab in shop pastes what
+/// The copy/cut register, one per process like yazi's, so every files tab in lazi pastes what
 /// any of them yanked.
 static YANK: Mutex<Option<Yank>> = Mutex::new(None);
 

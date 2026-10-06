@@ -18,7 +18,7 @@ use crate::ops;
 use crate::preview::Preview;
 
 /// Row 0 is the cwd, the last row is the status line, and the three columns fill the middle.
-/// Draws lazi into `area`, which is the whole screen standalone or a panel's share of it in shop.
+/// Draws the file manager into `area`, the screen below lazi's tab bar.
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
     if area.height < 3 {
         return;

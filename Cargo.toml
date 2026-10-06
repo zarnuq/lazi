@@ -2,7 +2,7 @@
 members = ["crates/*"]
 resolver = "3"
 
-# Shared so lazi and shop can't drift onto two versions of the same crate.
+# Shared so files and lazi can't drift onto two versions of the same crate.
 [workspace.dependencies]
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 ron = { version = "0.12.2", default-features = false }

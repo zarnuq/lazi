@@ -1,4 +1,4 @@
-//! The panels shop can show. An enum rather than a trait: shop knows every kind, and a new
+//! The panels lazi can show. An enum rather than a trait: lazi knows every kind, and a new
 //! kind is a variant plus an arm in each method.
 
 use std::io::{self, Write};
@@ -6,7 +6,7 @@ use std::os::fd::RawFd;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use lazi::{Key, Lazi, Outcome};
+use files::{Key, Files, Outcome};
 use ratatui::layout::Rect;
 use ratatui::{DefaultTerminal, Frame};
 
@@ -16,7 +16,7 @@ use crate::git::Git;
 
 /// Boxed: they differ in size by hundreds of bytes.
 pub enum Panel {
-    Lazi(Box<Lazi>),
+    Files(Box<Files>),
     Git(Box<Git>),
     Dashboard(Box<Dashboard>),
 }
@@ -24,7 +24,7 @@ pub enum Panel {
 impl Panel {
     pub fn new(spec: &PanelSpec) -> Result<Self, String> {
         match spec {
-            PanelSpec::Lazi { config, dir } => Ok(Panel::Lazi(Box::new(Lazi::new(config.clone(), dir.clone())?))),
+            PanelSpec::Files { config, dir } => Ok(Panel::Files(Box::new(Files::new(config.clone(), dir.clone())?))),
             PanelSpec::Git(spec) => Ok(Panel::Git(Box::new(Git::new((**spec).clone())?))),
             PanelSpec::Dashboard(spec) => Ok(Panel::Dashboard(Box::new(Dashboard::new((**spec).clone())?))),
         }
@@ -37,9 +37,9 @@ impl Panel {
         }
     }
 
-    pub fn lazi(&self) -> Option<&Lazi> {
+    pub fn files(&self) -> Option<&Files> {
         match self {
-            Panel::Lazi(p) => Some(p),
+            Panel::Files(p) => Some(p),
             _ => None,
         }
     }
@@ -52,10 +52,10 @@ impl Panel {
         }
     }
 
-    /// Whether the panel is taking text, so shop leaves every key to it.
+    /// Whether the panel is taking text, so lazi leaves every key to it.
     pub fn wants_text(&self) -> bool {
         match self {
-            Panel::Lazi(p) => p.wants_text(),
+            Panel::Files(p) => p.wants_text(),
             _ => false,
         }
     }
@@ -63,7 +63,7 @@ impl Panel {
     /// The panel's own key bindings, as (keys, action).
     pub fn help(&self) -> Vec<(String, String)> {
         match self {
-            Panel::Lazi(p) => p.help(),
+            Panel::Files(p) => p.help(),
             Panel::Git(p) => p.help(),
             Panel::Dashboard(p) => p.help(),
         }
@@ -72,7 +72,7 @@ impl Panel {
     /// The tab bar's label.
     pub fn name(&self) -> &'static str {
         match self {
-            Panel::Lazi(_) => "lazi",
+            Panel::Files(_) => "files",
             Panel::Git(_) => "git",
             Panel::Dashboard(_) => "home",
         }
@@ -81,14 +81,14 @@ impl Panel {
     /// The terminal title while this panel has focus.
     pub fn title(&self) -> String {
         match self {
-            Panel::Lazi(p) => p.title(),
+            Panel::Files(p) => p.title(),
             _ => self.name().into(),
         }
     }
 
     pub fn wake_fds(&self) -> Vec<RawFd> {
         match self {
-            Panel::Lazi(p) => p.wake_fds(),
+            Panel::Files(p) => p.wake_fds(),
             Panel::Git(p) => p.wake_fds(),
             Panel::Dashboard(_) => Vec::new(),
         }
@@ -96,7 +96,7 @@ impl Panel {
 
     pub fn on_wake(&mut self) -> bool {
         match self {
-            Panel::Lazi(p) => p.on_wake(),
+            Panel::Files(p) => p.on_wake(),
             Panel::Git(p) => p.on_wake(),
             Panel::Dashboard(_) => false,
         }
@@ -104,7 +104,7 @@ impl Panel {
 
     pub fn receive(&mut self, grace: Option<Duration>) -> bool {
         match self {
-            Panel::Lazi(p) => p.receive(grace),
+            Panel::Files(p) => p.receive(grace),
             Panel::Git(p) => p.receive(),
             Panel::Dashboard(_) => false,
         }
@@ -112,7 +112,7 @@ impl Panel {
 
     pub fn key(&mut self, term: &mut DefaultTerminal, key: Key) -> io::Result<Outcome> {
         match self {
-            Panel::Lazi(p) => p.key(term, key),
+            Panel::Files(p) => p.key(term, key),
             Panel::Git(p) => p.key(term, key),
             Panel::Dashboard(p) => Ok(p.key(key)),
         }
@@ -120,7 +120,7 @@ impl Panel {
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
         match self {
-            Panel::Lazi(p) => p.draw(frame, area),
+            Panel::Files(p) => p.draw(frame, area),
             Panel::Git(p) => p.draw(frame, area),
             Panel::Dashboard(p) => p.draw(frame, area),
         }
@@ -128,7 +128,7 @@ impl Panel {
 
     pub fn sync_image(&mut self, out: &mut impl Write) -> io::Result<()> {
         match self {
-            Panel::Lazi(p) => p.sync_image(out),
+            Panel::Files(p) => p.sync_image(out),
             _ => Ok(()),
         }
     }
@@ -136,14 +136,14 @@ impl Panel {
     /// Takes anything drawn outside ratatui's buffer (kitty images) off the screen.
     pub fn hide(&mut self, out: &mut impl Write) -> io::Result<()> {
         match self {
-            Panel::Lazi(p) => p.hide(out),
+            Panel::Files(p) => p.hide(out),
             _ => Ok(()),
         }
     }
 
     pub fn clear_images(&mut self, out: &mut impl Write) -> io::Result<()> {
         match self {
-            Panel::Lazi(p) => p.clear_images(out),
+            Panel::Files(p) => p.clear_images(out),
             _ => Ok(()),
         }
     }

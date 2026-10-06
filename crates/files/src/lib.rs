@@ -1,6 +1,5 @@
-//! lazi as a library: `Lazi` is the file manager as a panel that some other program drives,
-//! with the terminal and the event loop left to the caller. lazi's own binary is one caller,
-//! shop another.
+//! The file manager as a panel: `Files` is driven by lazi (`crates/lazi`), which owns the
+//! terminal and the event loop.
 
 mod app;
 mod config;
@@ -40,31 +39,31 @@ pub enum Outcome {
     Quit,
     /// Quit without writing the cwd file, so the shell stays where it was.
     QuitNoCwd,
-    /// Show this directory in a lazi panel. Never returned by lazi itself; shop's other panels
+    /// Show this directory in a files panel. Never returned by `Files` itself; lazi's other panels
     /// use it.
     Open(PathBuf),
     /// Show the key bindings.
     Help,
-    /// Open another lazi tab in this directory.
+    /// Open another files tab in this directory.
     NewTab(PathBuf),
     NextTab,
     PrevTab,
-    /// Open the search box with this query. Like `Open`, only shop's other panels ask this.
+    /// Open the search box with this query. Like `Open`, only lazi's other panels ask this.
     Search(String),
     /// Open this file in the editor.
     Edit(PathBuf),
-    /// Show this file in a lazi panel, the cursor on it.
+    /// Show this file in a files panel, the cursor on it.
     Reveal(PathBuf),
 }
 
-pub struct Lazi {
+pub struct Files {
     app: App,
     /// The keys of a sequence typed so far, like the first `g` of `gg`.
     pending: Vec<Key>,
 }
 
-impl Lazi {
-    /// Loads lazi's config and reads `dir` (else the working directory) inline. The config is
+impl Files {
+    /// Loads the files config and reads `dir` (else the working directory) inline. The config is
     /// process-wide: the first `new` in a process decides it.
     pub fn new(config: Option<PathBuf>, dir: Option<PathBuf>) -> Result<Self, String> {
         config::load(config)?;
@@ -101,7 +100,7 @@ impl Lazi {
         self.app.reveal(path);
     }
 
-    /// Shows `dir`, picked somewhere else (shop's git panel).
+    /// Shows `dir`, picked somewhere else (lazi's git panel).
     pub fn goto(&mut self, dir: &Path) {
         self.app.goto_path(dir.to_path_buf());
     }
