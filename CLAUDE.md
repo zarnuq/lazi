@@ -4,8 +4,9 @@ Guidance for working in this repo. Keep it short and current; delete anything th
 
 ## What this is
 
-**lazi** — a yazi/ranger-style terminal file manager in Rust (ratatui + crossterm). Three
-columns, vim keys, previews (syntect highlighting, kitty-graphics images, command output),
+**shop** — a terminal workspace in Rust (ratatui + crossterm), one tab at a time. Its main tab
+is **lazi**, a yazi/ranger-style file manager library (`crates/lazi`, no binary of its own):
+three columns, vim keys, previews (syntect highlighting, kitty-graphics images, command output),
 inotify live updates. Linux only. Configured from a RON file (`crates/lazi/config.ron` is the
 reference) with no built-in defaults: every option, key, previewer and opener comes from it.
 
@@ -13,8 +14,8 @@ reference) with no built-in defaults: every option, key, previewer and opener co
 
 ```sh
 cargo build --release      # profile: fat LTO, 1 codegen unit, stripped, unwinding
-cargo run -p lazi -- --config crates/lazi/config.ron [DIR]   # needs a real terminal; drive it in tmux otherwise
-cargo run --release -p lazi -- --config crates/lazi/config.ron --bench   # time to the first complete frame
+cargo run -p shop -- --config crates/shop/host.ron [DIR]   # needs a real terminal; drive it in tmux otherwise
+cargo run --release -p shop -- --config crates/shop/host.ron --bench   # time to the first complete frame
 cargo clippy --workspace   # keep it warning-free
 ```
 
@@ -26,8 +27,7 @@ Check behaviour by running it.
 
 lazi lives in `crates/lazi/src/`:
 
-- `main.rs` — args, the event loop, frame drawing.
-- `lib.rs` — `Lazi`, lazi as a panel a host drives: key dispatch (`Lazi::key` →
+- `lib.rs` — `Lazi`, lazi as a panel shop drives: key dispatch (`Lazi::key` →
   `config::lookup` → `apply`), prompt and `O`-menu key handling, drawing into a `Rect`.
 - `config.rs` — the config schema (serde structs, read with `ron`), loading into a static
   (`config::get()`), key-name parsing, and `lookup` for multi-key sequences. New features
@@ -55,17 +55,17 @@ lazi lives in `crates/lazi/src/`:
 
 ## shop
 
-`crates/shop` is a TUI host that shows one panel at a time. Panels: lazi (via `lazi::Lazi` in
+`crates/shop` is the program: args (`[DIR] --cwd-file --config --bench`, which the zsh `y`
+wrapper relies on), the event loop, and one panel at a time. Panels: lazi (via `lazi::Lazi` in
 `crates/lazi/src/lib.rs`) and git (`git.rs`: repos under configured roots with zhimmer's
 status symbols, a worker thread for `git status`/`git fetch`, inotify on each `.git`;
 `status.rs` holds the pure parser and discovery the tests cover). Its config is `host.ron`
 (`crates/shop/host.ron` is the reference). Keys go to shop's sequence map first and fall
 through to the focused panel when nothing there starts with them, so shop's bindings live
-behind a prefix (`Ctrl+x`) that panels don't use. New panels are a `Panel` variant in
+on chords the panels don't use (`Alt+1`, `Alt+2`, `Alt+q`). New panels are a `Panel` variant in
 `panel.rs` plus a `PanelSpec` variant in `config.rs`.
 
 ```sh
-cargo run -p shop -- --config crates/shop/host.ron
 cargo test -p shop          # routing, status parsing, discovery, the reference host.ron
 ```
 
@@ -89,6 +89,6 @@ cargo test -p shop          # routing, status parsing, discovery, the reference 
   where they matter (timings, costs).
 - Removing a feature is common. Delete it outright, including its `Action`, its bindings in
   `config.ron` and any helpers it alone used. Also update the key table in `README.md`.
-- The Gentoo ebuild is `app-misc/lazi/lazi-9999.ebuild` in `../gentoo-overlay`. If the
-  minimum Rust version goes up, update `RUST_MIN_VER` there. It installs `config.ron` to
-  `/etc/xdg/lazi/`.
+- The Gentoo ebuild is `app-misc/shop/shop-9999.ebuild` in `../gentoo-overlay`. If the
+  minimum Rust version goes up, update `RUST_MIN_VER` there. It installs `host.ron` to
+  `/etc/xdg/shop/` and lazi's `config.ron` to `/etc/xdg/lazi/`.
