@@ -35,6 +35,8 @@
                 "r": Refresh,
                 "?": Help,
                 "g l": Run(run: "lazygit", block: true),
+                // Everything uncommitted, staged or not, in git's pager; q comes back.
+                "d": Run(run: "git diff HEAD", block: true),
                 "p": Run(run: "git pull --ff-only", block: true),
                 "P": Run(run: "git push", block: true),
                 "t": Run(run: r#"kitty --directory "$1""#, block: false),
