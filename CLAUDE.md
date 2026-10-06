@@ -94,6 +94,10 @@ cargo test -p lazi          # routing, status parsing, discovery, the reference 
   throughout `Cargo.toml`).
 - **Commits:** imperative subject; the body explains what changed and why, with numbers
   where they matter (timings, costs).
+- **Two configs.** `config.ron` is lazi's (tabs, home menu, git, search, lazi's keys; schema in
+  `crates/lazi/src/config.rs`); `files.ron` is the file browser's (schema in
+  `crates/files/src/config.rs`). Both live in `~/.config/lazi/`. A panel asks lazi for
+  anything outside itself (tab changes, search, editing, revealing) through `files::Outcome`.
 - Removing a feature is common. Delete it outright, including its `Action`, its bindings in
   `files.ron` or `config.ron` and any helpers it alone used. Also update the key table in `README.md`.
 - The Gentoo ebuild is `app-misc/lazi/lazi-9999.ebuild` in `../gentoo-overlay`. If the

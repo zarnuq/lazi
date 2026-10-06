@@ -30,9 +30,8 @@ lazi [DIR] [--cwd-file PATH] [--config PATH]
 The number keys pick a tab (the tab bar numbers them), and `Ctrl+c` quits. In the file browser `t`
 opens another tab in the same folder, `H`/`L` move between tabs, and `q` closes a tab (on tab 1
 it quits lazi). Every files tab shares one copy/cut register, so `y` in one and `p` in another
-works.
-`DIR` is where the file browser starts. `--config` is lazi's `config.ron`; the file browser's settings
-are `files.ron` (below).
+works. `DIR` is where the file browser starts. `--config` is lazi's `config.ron`; the file
+browser's settings are always `files.ron` (below).
 
 `--cwd-file` writes the directory the file browser was in when you quit with `q` or `Ctrl+c`
 (not `Q`). A shell wrapper to follow it:
@@ -86,9 +85,12 @@ lazi reads the first of `$XDG_CONFIG_HOME/lazi/config.ron` (usually
 `/etc/xdg/lazi/config.ron`) for its tabs, keys and search, and `files.ron` from the same places
 for the file browser. There are no built-in defaults: every setting is required, an
 unbound key does nothing, and lazi refuses to start without a config, or with a mistake in
-it, naming the line. Start from [`files.ron`](crates/files/files.ron), which documents every option.
+it, naming the line. Start from [`config.ron`](crates/lazi/config.ron) and
+[`files.ron`](crates/files/files.ron), which document every option.
 
-The file is [RON](https://github.com/ron-rs/ron). It covers:
+Both are [RON](https://github.com/ron-rs/ron). `config.ron` covers the tabs (which open, and
+whether they're restored), the home tab's menu, the git tab's roots, symbols and keys, the search
+box, and lazi's own keys. `files.ron` covers the file browser:
 
 - options: hidden files, column ratio, scrolloff, syntax theme, tab size, preview timeout,
   the clipboard and cross-filesystem trash commands;
@@ -118,6 +120,8 @@ what's missing when you use it:
 | `fzf` | `z` |
 | `gio` (glib) | trashing files on another filesystem |
 | `$EDITOR` (else `nvim`), `xdg-open`, `swayimg`, `mpv`, `mediainfo` | openers |
+| `git` | the git tab |
+| `fd`, `rg` (ripgrep) | the search box |
 
 ## Features
 
@@ -170,11 +174,25 @@ what's missing when you use it:
 - Synchronized updates, so no half-drawn frames; the terminal title shows the cwd.
 - `--cwd-file` for cd-on-quit (`Q` skips it); `^z` suspends.
 - `--bench` measures time to the first frame.
-- Configured entirely from a RON file.
+- Configured entirely from two RON files.
 
 ## Keys
 
-These are the bindings in the example `config.ron`.
+lazi's own, from the example `config.ron`, work on every tab except while a prompt takes text:
+
+| Key | Action |
+| --- | --- |
+| `1`–`9` | Go to that tab |
+| `^p` | Search |
+| `^c` | Quit |
+
+The home tab: `j`/`k` move, `Enter` runs a menu item or opens a file or folder, `^r` shows a
+file or folder in the file browser, and each menu item has its own key (`p` projects, `s`
+search, `h` home, `c`/`L` the configs). The git tab: `j`/`k` move, `Enter` opens the repo in
+the file browser, `r` refreshes, `d` diff, `p`/`P` pull/push, `g l` lazygit, `t` a terminal,
+`c`/`x` claude/codex there.
+
+The file browser's, from the example `files.ron`:
 
 | Key | Action |
 | --- | --- |
