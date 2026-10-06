@@ -71,7 +71,7 @@ pub fn parse(text: &str) -> Session {
 
 /// The tabs to open and which to focus: the saved ones in order, built from the config's panel
 /// settings, with tab one (the first lazi tab) opening `here` and focused. Other lazi tabs whose
-/// directory is gone are dropped; panels the config gained since are added at the end. With
+/// directory is gone are dropped; panels the config gained since go in at their place in it. With
 /// nothing saved, it's the config's own layout.
 pub fn layout(saved: Option<Session>, specs: &[PanelSpec], here: PathBuf, exists: impl Fn(&Path) -> bool) -> (Vec<PanelSpec>, usize) {
     let Some(lazi_config) = specs.iter().find_map(|s| match s {
@@ -83,21 +83,25 @@ pub fn layout(saved: Option<Session>, specs: &[PanelSpec], here: PathBuf, exists
     };
     let mut out = Vec::new();
     if let Some(saved) = saved {
-        let mut others: Vec<PanelSpec> = specs.iter().filter(|s| !matches!(s, PanelSpec::Lazi { .. })).cloned().collect();
+        // With their place in the config, for any the session doesn't have.
+        let mut others: Vec<(usize, PanelSpec)> = specs.iter().cloned().enumerate().filter(|(_, s)| !matches!(s, PanelSpec::Lazi { .. })).collect();
         let mut first = true;
         for tab in saved.tabs {
             let spec = match tab {
                 // Tab one's folder is about to be replaced by `here`, so it needn't still exist.
                 Tab::Lazi(dir) if mem::take(&mut first) || exists(&dir) => PanelSpec::Lazi { config: lazi_config.clone(), dir: Some(dir) },
-                Tab::Other(name) => match others.iter().position(|s| s.name() == name) {
-                    Some(i) => others.remove(i),
+                Tab::Other(name) => match others.iter().position(|(_, s)| s.name() == name) {
+                    Some(i) => others.remove(i).1,
                     None => continue,
                 },
                 _ => continue,
             };
             out.push(spec);
         }
-        out.extend(others);
+        // A panel new to the config goes where the config puts it, as far as the tabs allow.
+        for (i, spec) in others {
+            out.insert(i.min(out.len()), spec);
+        }
     }
     if !out.iter().any(|s| matches!(s, PanelSpec::Lazi { .. })) {
         // Nothing usable was saved: the config's layout.
@@ -164,6 +168,11 @@ mod tests {
         PanelSpec::Git(spec)
     }
 
+    fn dash() -> PanelSpec {
+        let style = crate::config::DashStyles { title: Default::default(), key: Default::default(), cursor: Default::default() };
+        PanelSpec::Dashboard(Box::new(crate::config::DashSpec { recent: 5, menu: Vec::new(), style, keys: Vec::new() }))
+    }
+
     /// Which panel each spec is, and where a lazi one starts, for comparing layouts.
     fn shape(specs: &[PanelSpec]) -> Vec<String> {
         specs
@@ -209,15 +218,16 @@ mod tests {
 
     #[test]
     fn other_panels_come_back_in_their_saved_order() {
-        let dash = PanelSpec::Dashboard(Box::new(crate::config::DashSpec {
-            recent: 5,
-            menu: Vec::new(),
-            style: crate::config::DashStyles { title: Default::default(), key: Default::default(), cursor: Default::default() },
-            keys: Vec::new(),
-        }));
         let saved = Session { tabs: vec![Tab::Lazi("/a".into()), Tab::Other("git".into()), Tab::Other("home".into())] };
-        let (specs, _) = layout(Some(saved), &[lazi("/cfg"), dash, git(300)], "/here".into(), |_| true);
+        let (specs, _) = layout(Some(saved), &[lazi("/cfg"), dash(), git(300)], "/here".into(), |_| true);
         assert_eq!(shape(&specs), ["lazi /here", "git 300", "home"]);
+    }
+
+    #[test]
+    fn a_panel_new_to_the_config_goes_where_the_config_puts_it() {
+        let saved = Session { tabs: vec![Tab::Lazi("/a".into()), Tab::Other("git".into())] };
+        let (specs, _) = layout(Some(saved), &[lazi("/cfg"), dash(), git(300)], "/here".into(), |_| true);
+        assert_eq!(shape(&specs), ["lazi /here", "home", "git 300"]);
     }
 
     #[test]
