@@ -32,6 +32,10 @@ pub struct SearchSpec {
     pub open: String,
     /// The same at line $2.
     pub open_line: String,
+    /// Search hidden files too, which is where dotfiles live.
+    pub hidden: bool,
+    /// Globs never searched, such as .git or ~/.cache.
+    pub exclude: Vec<String>,
     pub style: SearchStyles,
     /// Unbound printable keys type into the query.
     #[serde(deserialize_with = "lazi::sequences")]

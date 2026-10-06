@@ -59,7 +59,8 @@ tabs are kept: with `restore: true` in `host.ron` they reopen in the folder you 
 `Ctrl+p` opens one search box over any tab, like Obsidian's search. Each keystroke searches
 repos (from the git tab), folders you've visited, file names and file contents under the
 focused tab's folder, and shows them grouped, content matches under their file. The query is an
-exact regex, case-insensitive unless it has a capital; `repo:`, `dir:`, `file:` or `content:`
+exact regex, case-insensitive unless it has a capital, and reaches hidden files (dotfiles) except
+the `exclude` globs in `host.ron`; `repo:`, `dir:`, `file:` or `content:`
 narrows it to one source. `Enter` opens a file in `$EDITOR` (at the matching line) or goes to a
 folder; `Ctrl+r` shows the file in the file browser instead. Needs `fd` and `rg`.
 

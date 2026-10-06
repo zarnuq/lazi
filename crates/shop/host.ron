@@ -73,6 +73,10 @@
         // $1 is the file; open_line also gets the line as $2.
         open: r#"${EDITOR:-nvim} "$1""#,
         open_line: r#"${EDITOR:-nvim} +"$2" "$1""#,
+        // Hidden files are where dotfiles live (~/.config), so they're searched, minus these
+        // globs: git's own store, and caches and app data that would bury everything from ~.
+        hidden: true,
+        exclude: [".git", ".cache", ".local/share", ".local/state", ".cargo", ".rustup", ".npm", ".mozilla", ".zen", "node_modules"],
         style: (
             section: (fg: "#89b4fa", bold: true),
             line_number: (fg: "#6c7086"),

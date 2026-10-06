@@ -195,10 +195,9 @@ impl Search {
             rx,
             waker,
         };
-        let (root, tx, waker) = (search.root.clone(), search.tx.clone(), search.waker.clone());
+        let (root, tx, waker, spec) = (search.root.clone(), search.tx.clone(), search.waker.clone(), search.spec.clone());
         thread::spawn(move || {
-            // fd skips hidden and .gitignored files, which is what a search wants anyway.
-            let out = Command::new("fd").args(["--type", "f", "--color", "never"]).current_dir(&root).stdin(Stdio::null()).stderr(Stdio::null()).output();
+            let out = Command::new("fd").args(fd_args(spec.hidden, &spec.exclude)).current_dir(&root).stdin(Stdio::null()).stderr(Stdio::null()).output();
             let files = out.map(|o| o.stdout.split(|&b| b == b'\n').filter(|l| !l.is_empty()).map(|l| PathBuf::from(OsStr::from_bytes(l))).collect()).unwrap_or_default();
             if tx.send(Msg::Files(files)).is_ok() {
                 waker.wake();
@@ -324,9 +323,9 @@ impl Search {
         }
         if wants(Scope::Content) {
             let (root, tx, waker, generation) = (self.root.clone(), self.tx.clone(), self.waker.clone(), self.generation.clone());
-            let pattern = pattern.to_owned();
+            let args = rg_args(self.spec.hidden, &self.spec.exclude, pattern);
             thread::spawn(move || {
-                grep(&root, &pattern, &generation, n, |hits| {
+                grep(&root, &args, &generation, n, |hits| {
                     if tx.send(Msg::Content(n, hits)).is_ok() {
                         waker.wake();
                     }
@@ -441,10 +440,9 @@ impl Search {
 
 /// The matching lines under `root` from rg, handed to `found` a file at a time (its heading,
 /// then its lines); stops early, killing rg, at the cap or when a newer query has started.
-fn grep(root: &Path, pattern: &str, generation: &AtomicU64, n: u64, mut found: impl FnMut(Vec<Hit>)) {
-    let case = if smart_case_ignores(pattern) { "--ignore-case" } else { "--case-sensitive" };
+fn grep(root: &Path, args: &[String], generation: &AtomicU64, n: u64, mut found: impl FnMut(Vec<Hit>)) {
     let child = Command::new("rg")
-        .args(["--null", "--line-number", "--no-heading", "--color", "never", "--max-columns", "300", case, "-e", pattern])
+        .args(args)
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -500,9 +498,52 @@ fn tilde(path: &Path) -> String {
     }
 }
 
+/// fd's arguments for listing files: .gitignore'd ones skipped as always, hidden ones (dotfiles
+/// in ~/.config) included if asked, `exclude` globs left out.
+pub fn fd_args(hidden: bool, exclude: &[String]) -> Vec<String> {
+    let mut args: Vec<String> = ["--type", "f", "--color", "never"].map(str::to_owned).into();
+    if hidden {
+        args.push("--hidden".to_owned());
+    }
+    for glob in exclude {
+        args.extend(["--exclude".to_owned(), glob.clone()]);
+    }
+    args
+}
+
+/// rg's arguments for `pattern`, with the same reach as `fd_args`. Over-long lines show their
+/// start rather than rg's "[Omitted long matching line]".
+pub fn rg_args(hidden: bool, exclude: &[String], pattern: &str) -> Vec<String> {
+    let case = if smart_case_ignores(pattern) { "--ignore-case" } else { "--case-sensitive" };
+    let mut args: Vec<String> =
+        ["--null", "--line-number", "--no-heading", "--color", "never", "--max-columns", "300", "--max-columns-preview", case].map(str::to_owned).into();
+    if hidden {
+        args.push("--hidden".to_owned());
+    }
+    for glob in exclude {
+        args.extend(["--glob".to_owned(), format!("!{glob}")]);
+    }
+    args.extend(["-e".to_owned(), pattern.to_owned()]);
+    args
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dotfiles live in hidden folders (~/.config), so those are searched, minus the excludes.
+    #[test]
+    fn hidden_files_are_searched_except_what_is_excluded() {
+        let exclude = vec![".git".to_owned(), ".cache".to_owned()];
+        let fd = fd_args(true, &exclude);
+        assert!(fd.contains(&"--hidden".to_owned()));
+        assert!(fd.windows(2).any(|w| w == ["--exclude", ".cache"]));
+        let rg = rg_args(true, &exclude, "config");
+        assert!(rg.contains(&"--hidden".to_owned()));
+        assert!(rg.windows(2).any(|w| w == ["--glob", "!.git"]));
+        assert_eq!(rg[rg.len() - 2..], ["-e", "config"]);
+        assert!(!fd_args(false, &exclude).contains(&"--hidden".to_owned()));
+    }
 
     #[test]
     fn a_prefix_narrows_the_scope() {
