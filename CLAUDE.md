@@ -18,7 +18,8 @@ cargo run --release -p lazi -- --config crates/lazi/config.ron --bench   # time 
 cargo clippy --workspace   # keep it warning-free
 ```
 
-Tests are few: kitty image tracking in lazi, key routing in shop (`cargo test --workspace`).
+Tests are few: kitty image tracking in lazi; key routing, git status parsing, repo discovery
+and the reference `host.ron` in shop (`cargo test --workspace`).
 Check behaviour by running it.
 
 ## Layout
@@ -54,8 +55,10 @@ lazi lives in `crates/lazi/src/`:
 
 ## shop
 
-`crates/shop` is a TUI host that shows one panel at a time; lazi (via `lazi::Lazi` in
-`crates/lazi/src/lib.rs`) is the only panel so far. Its config is `host.ron`
+`crates/shop` is a TUI host that shows one panel at a time. Panels: lazi (via `lazi::Lazi` in
+`crates/lazi/src/lib.rs`) and git (`git.rs`: repos under configured roots with zhimmer's
+status symbols, a worker thread for `git status`/`git fetch`, inotify on each `.git`;
+`status.rs` holds the pure parser and discovery the tests cover). Its config is `host.ron`
 (`crates/shop/host.ron` is the reference). Keys go to shop's sequence map first and fall
 through to the focused panel when nothing there starts with them, so shop's bindings live
 behind a prefix (`Ctrl+x`) that panels don't use. New panels are a `Panel` variant in
@@ -70,7 +73,8 @@ cargo test -p shop          # the one test: prefix routing
 
 - **No idle wakeups.** The main loop sleeps in `wake::wait`; anything that produces work
   for it from another thread must go through `Notifier::send` (which pokes the eventfd),
-  never a timer or polling loop.
+  never a timer or polling loop. The one periodic thing is shop's git ticker
+  thread, which wakes the loop once per `fetch_every` to start a fetch round.
 - **Workers never block the UI.** Directory reads, previews and file operations happen off
   the main thread and come back as `Msg`. Only the initial cwd read is inline.
 - **Before handing over the terminal** (blocking opener, fzf, suspend), call

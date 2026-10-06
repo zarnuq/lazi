@@ -21,7 +21,9 @@ mkdir -p ~/.config/lazi && cp crates/lazi/config.ron ~/.config/lazi/
 ## shop
 
 `crates/shop` is an experimental host that runs lazi as one panel of a terminal workspace,
-with `Ctrl+x` bindings of its own. See `crates/shop/host.ron`.
+next to a git panel that lists every repo under your project folders with zhimmer-style
+status symbols (uncommitted changes, commits to push and to pull), fetched in the background.
+shop has `Ctrl+x` bindings of its own. See `crates/shop/host.ron`.
 
 ## Usage
 

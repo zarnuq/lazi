@@ -10,15 +10,19 @@ use ratatui::layout::Rect;
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::config::PanelSpec;
+use crate::git::Git;
 
+/// Boxed: the two differ in size by hundreds of bytes.
 pub enum Panel {
-    Lazi(Lazi),
+    Lazi(Box<Lazi>),
+    Git(Box<Git>),
 }
 
 impl Panel {
     pub fn new(spec: &PanelSpec) -> Result<Self, String> {
         match spec {
-            PanelSpec::Lazi { config, dir } => Ok(Panel::Lazi(Lazi::new(config.clone(), dir.clone())?)),
+            PanelSpec::Lazi { config, dir } => Ok(Panel::Lazi(Box::new(Lazi::new(config.clone(), dir.clone())?))),
+            PanelSpec::Git(spec) => Ok(Panel::Git(Box::new(Git::new((**spec).clone())?))),
         }
     }
 
@@ -26,6 +30,7 @@ impl Panel {
     pub fn show(&mut self) {
         match self {
             Panel::Lazi(_) => {}
+            Panel::Git(p) => p.show(),
         }
     }
 
@@ -33,6 +38,7 @@ impl Panel {
     pub fn name(&self) -> &'static str {
         match self {
             Panel::Lazi(_) => "lazi",
+            Panel::Git(_) => "git",
         }
     }
 
@@ -40,42 +46,49 @@ impl Panel {
     pub fn title(&self) -> String {
         match self {
             Panel::Lazi(p) => p.title(),
+            Panel::Git(_) => "git".into(),
         }
     }
 
     pub fn wake_fds(&self) -> Vec<RawFd> {
         match self {
             Panel::Lazi(p) => p.wake_fds(),
+            Panel::Git(p) => p.wake_fds(),
         }
     }
 
     pub fn on_wake(&mut self) -> bool {
         match self {
             Panel::Lazi(p) => p.on_wake(),
+            Panel::Git(p) => p.on_wake(),
         }
     }
 
     pub fn receive(&mut self, grace: Option<Duration>) -> bool {
         match self {
             Panel::Lazi(p) => p.receive(grace),
+            Panel::Git(p) => p.receive(),
         }
     }
 
     pub fn key(&mut self, term: &mut DefaultTerminal, key: Key) -> io::Result<Outcome> {
         match self {
             Panel::Lazi(p) => p.key(term, key),
+            Panel::Git(p) => p.key(term, key),
         }
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
         match self {
             Panel::Lazi(p) => p.draw(frame, area),
+            Panel::Git(p) => p.draw(frame, area),
         }
     }
 
     pub fn sync_image(&mut self, out: &mut impl Write) -> io::Result<()> {
         match self {
             Panel::Lazi(p) => p.sync_image(out),
+            Panel::Git(_) => Ok(()),
         }
     }
 
@@ -83,12 +96,14 @@ impl Panel {
     pub fn hide(&mut self, out: &mut impl Write) -> io::Result<()> {
         match self {
             Panel::Lazi(p) => p.hide(out),
+            Panel::Git(_) => Ok(()),
         }
     }
 
     pub fn clear_images(&mut self, out: &mut impl Write) -> io::Result<()> {
         match self {
             Panel::Lazi(p) => p.clear_images(out),
+            Panel::Git(_) => Ok(()),
         }
     }
 }

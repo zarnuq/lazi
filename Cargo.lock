@@ -881,6 +881,7 @@ name = "shop"
 version = "0.1.0"
 dependencies = [
  "lazi",
+ "libc",
  "ratatui",
  "ron",
  "serde",

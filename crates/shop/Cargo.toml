@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 lazi = { path = "../lazi" }
+libc = "0.2.189"
 ratatui.workspace = true
 ron.workspace = true
 serde.workspace = true

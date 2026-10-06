@@ -4,8 +4,37 @@
     // Panels in tab order; the first has focus at start.
     //   Lazi(config, dir): config None is lazi's usual lookup, dir None is shop's working
     //   directory. lazi's config is per process, so a second Lazi panel uses the first's.
+    //   Git(roots, fetch_every, symbols, style, keys): repos directly under each root, with
+    //   zhimmer's status symbols. Keys are the panel's own; Run's $1 is the repo's path.
     panels: [
         Lazi(config: None, dir: None),
+        Git(
+            roots: ["~/Projects"],
+            // Seconds between background fetch rounds.
+            fetch_every: 300,
+            symbols: (
+                untracked: "?", staged: "+", modified: "!", renamed: "»", deleted: "✘",
+                unmerged: "=", ahead: "⇡", behind: "⇣", clean: "✓",
+            ),
+            style: (
+                root: (fg: "#89b4fa", bold: true),
+                branch: (fg: "#cba6f7"),
+                status: (fg: "#f9e2af"),
+                arrows: (fg: "#fab387"),
+                clean: (fg: "#a6e3a1"),
+                error: (fg: "#f38ba8"),
+                cursor: (reversed: true),
+            ),
+            keys: {
+                "j": Down, "k": Up, "Down": Down, "Up": Up, "g g": Top, "G": Bottom,
+                "Enter": Open, "l": Open,
+                "r": Refresh,
+                "g l": Run(run: "lazygit", block: true),
+                "p": Run(run: "git pull --ff-only", block: true),
+                "c": Run(run: r#"kitty --directory "$1" claude"#, block: false),
+                "x": Run(run: r#"kitty --directory "$1" codex"#, block: false),
+            },
+        ),
     ],
     // Styles are written as in lazi's config.ron.
     style: (
@@ -22,6 +51,7 @@
         "Ctrl+x b": Next,
         "Ctrl+x B": Prev,
         "Ctrl+x 1": Focus(0),
+        "Ctrl+x 2": Focus(1),
         "Ctrl+x Ctrl+c": Quit,
     },
 )

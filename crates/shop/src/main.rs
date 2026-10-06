@@ -2,9 +2,8 @@
 //! bindings first (all behind a prefix like Ctrl+x); the rest go to the focused panel.
 
 mod config;
+mod git;
 mod panel;
-// Used by the git panel from the next commit on.
-#[cfg_attr(not(test), allow(dead_code))]
 mod status;
 
 use std::ffi::OsStr;
@@ -172,8 +171,6 @@ fn focus(term: &mut DefaultTerminal, shop: &mut Shop, next: usize) -> io::Result
 }
 
 /// Shows `dir` in the first lazi panel and focuses it. Without a lazi panel it does nothing.
-// Lazi is the only panel until the git panel lands in the next commit.
-#[allow(irrefutable_let_patterns)]
 fn open(term: &mut DefaultTerminal, shop: &mut Shop, dir: &Path) -> io::Result<()> {
     let Some(i) = shop.panels.iter().position(|p| matches!(p, Panel::Lazi(_))) else { return Ok(()) };
     if let Panel::Lazi(lazi) = &mut shop.panels[i] {

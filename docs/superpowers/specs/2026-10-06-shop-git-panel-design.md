@@ -105,10 +105,9 @@ changes.
 Every send pokes the waker. The panel's `on_wake` drains the waker and the watcher; its
 `receive` drains the channel and applies results. No main-loop timers.
 
-**Ticker thread**: sleeps `fetch_every` seconds and queues `Job::Fetch(all)`, forever. It
-wakes the main loop only through the results it causes, so the main loop still sleeps
-until there is something to draw. This replaces the timerfd mentioned while brainstorming:
-same effect, no unsafe, and the main loop's no-idle-wakeup rule holds as written.
+**Ticker thread**: sleeps `fetch_every` seconds and sends `Msg::Tick` through the panel's
+waker, forever. The panel answers by queueing a fetch of every repo not already fetching.
+One main-loop wakeup per interval, which always leads to work; no timerfd and no unsafe.
 
 **When status refreshes**: at startup; on `Refresh`; when the panel gains focus; after each
 repo's fetch; and when the watcher sees a create, delete or rename in a repo's `.git` or
