@@ -14,8 +14,8 @@ Gentoo: `app-misc/lazi` in the [zarnuq overlay](https://github.com/zarnuq/gentoo
 From source (Rust 1.88+):
 
 ```sh
-cargo install --path .
-mkdir -p ~/.config/lazi && cp config.ron ~/.config/lazi/
+cargo install --path crates/lazi
+mkdir -p ~/.config/lazi && cp crates/lazi/config.ron ~/.config/lazi/
 ```
 
 ## Usage
@@ -45,7 +45,7 @@ lazi reads the first of `--config PATH`, `$XDG_CONFIG_HOME/lazi/config.ron` (usu
 `~/.config/lazi/config.ron`) and `$XDG_CONFIG_DIRS/lazi/config.ron` (usually
 `/etc/xdg/lazi/config.ron`). There are no built-in defaults: every setting is required, an
 unbound key does nothing, and lazi refuses to start without a config, or with a mistake in
-it, naming the line. Start from [`config.ron`](config.ron), which documents every option.
+it, naming the line. Start from [`config.ron`](crates/lazi/config.ron), which documents every option.
 
 The file is [RON](https://github.com/ron-rs/ron). It covers:
 

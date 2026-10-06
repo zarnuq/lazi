@@ -6,21 +6,23 @@ Guidance for working in this repo. Keep it short and current; delete anything th
 
 **lazi** — a yazi/ranger-style terminal file manager in Rust (ratatui + crossterm). Three
 columns, vim keys, previews (syntect highlighting, kitty-graphics images, command output),
-inotify live updates. Linux only. Configured from a RON file (`config.ron` in the repo is the
+inotify live updates. Linux only. Configured from a RON file (`crates/lazi/config.ron` is the
 reference) with no built-in defaults: every option, key, previewer and opener comes from it.
 
 ## Build / run
 
 ```sh
 cargo build --release      # profile: fat LTO, 1 codegen unit, stripped, unwinding
-cargo run -- --config config.ron [DIR]   # needs a real terminal; drive it in tmux otherwise
-cargo run --release -- --config config.ron --bench   # time to the first complete frame
-cargo clippy               # keep it warning-free
+cargo run -p lazi -- --config crates/lazi/config.ron [DIR]   # needs a real terminal; drive it in tmux otherwise
+cargo run --release -p lazi -- --config crates/lazi/config.ron --bench   # time to the first complete frame
+cargo clippy --workspace   # keep it warning-free
 ```
 
 There are no tests. Check behaviour by running it.
 
 ## Layout
+
+lazi lives in `crates/lazi/src/`:
 
 - `main.rs` — args, the event loop, key dispatch (`handle` → `config::lookup` → `apply`),
   prompt and `O`-menu key handling, frame drawing.
