@@ -249,7 +249,15 @@ impl Git {
             return;
         }
         let list = Rect { height: area.height - 1, ..area };
-        let name_w = self.roots.iter().flat_map(|r| r.repos.iter().flatten().map(|p| relative(&r.path, p).chars().count())).max().unwrap_or(0).min(40);
+        // The name column, wide enough for the longest indented name.
+        let name_w = self
+            .roots
+            .iter()
+            .flat_map(|r| r.repos.iter().flatten().map(|p| place(&r.path, p)))
+            .map(|(folder, name)| indent(&folder) + name.chars().count())
+            .max()
+            .unwrap_or(0)
+            .min(40);
         let branch_w = self.repos.values().filter_map(|r| r.status.as_ref()?.as_ref().ok()).map(|s| s.branch.chars().count()).max().unwrap_or(0).min(24);
 
         let mut rows: Vec<Line> = Vec::new();
@@ -261,11 +269,20 @@ impl Git {
                 header.push(Span::styled(" (missing)", self.spec.style.error));
             }
             rows.push(Line::from(header));
+            // `discover` keeps each folder's repos together, so a header goes in where the folder
+            // changes.
+            let mut group = None;
             for path in root.repos.iter().flatten() {
+                let (folder, name) = place(&root.path, path);
+                if folder.is_some() && folder != group {
+                    let label = format!("  {}/", folder.as_deref().unwrap_or(""));
+                    rows.push(Line::from(Span::styled(label, self.spec.style.root)));
+                }
                 if index == self.cursor {
                     cursor_row = Some(rows.len());
                 }
-                rows.push(self.row(path, &relative(&root.path, path), name_w, branch_w));
+                rows.push(self.row(path, &name, indent(&folder), name_w, branch_w));
+                group = folder;
                 index += 1;
             }
         }
@@ -303,11 +320,12 @@ impl Git {
     }
 
     /// One repo's row: name, branch, symbols, and fetch state.
-    fn row(&self, path: &Path, label: &str, name_w: usize, branch_w: usize) -> Line<'static> {
+    fn row(&self, path: &Path, name: &str, indent: usize, name_w: usize, branch_w: usize) -> Line<'static> {
         let style = &self.spec.style;
         // Cut to the column, like the branch below, so the columns stay in line.
-        let cut: String = label.chars().take(name_w).collect();
-        let mut spans = vec![Span::raw(format!("  {cut:<name_w$}  "))];
+        let width = name_w.saturating_sub(indent);
+        let cut: String = name.chars().take(width).collect();
+        let mut spans = vec![Span::raw(format!("  {:indent$}{cut:<width$}  ", ""))];
         let repo = self.repos.get(path);
         match repo.and_then(|r| r.status.as_ref()) {
             None => {}
@@ -543,9 +561,17 @@ fn run(program: &str, args: &[&str], dir: &Path, limit: Duration) -> Result<Stri
     Err(stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).map_or_else(|| status.to_string(), str::to_owned))
 }
 
-/// A repo as the panel lists it: its path under the root, like `Projects/lazi`.
-fn relative(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root).unwrap_or(path).to_string_lossy().into_owned()
+/// Where a repo goes in the list: the folder under the root it's grouped in (None for one right
+/// in the root), and its own name.
+fn place(root: &Path, path: &Path) -> (Option<String>, String) {
+    let under = path.strip_prefix(root).unwrap_or(path);
+    let folder = under.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.to_string_lossy().into_owned());
+    (folder, name(path))
+}
+
+/// A grouped repo sits two columns in from its folder's header.
+fn indent(folder: &Option<String>) -> usize {
+    if folder.is_some() { 2 } else { 0 }
 }
 
 fn name(path: &Path) -> String {

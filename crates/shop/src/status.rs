@@ -83,7 +83,8 @@ fn flag(s: &mut Status, x: char, y: char) {
 }
 
 /// The git repositories under `root`, down to `depth` levels (1 is its direct subdirectories),
-/// sorted case-insensitively like lazi's listings. A repo is a directory with a `.git` entry (a
+/// grouped by the folder they're in: the root's own first, then each folder's, both sorted
+/// case-insensitively like lazi's listings. A repo is a directory with a `.git` entry (a
 /// directory, or a file for worktrees and submodules). The search doesn't go into a repo, so
 /// submodules and tools cloned inside one stay out, and skips hidden directories, where
 /// `~/.local` and plugin managers keep clones nobody works in. Err only when `root` itself
@@ -109,7 +110,11 @@ pub fn discover(root: &Path, depth: usize) -> io::Result<Vec<PathBuf>> {
             }
         }
     }
-    repos.sort_by_cached_key(|path| path.strip_prefix(root).unwrap_or(path).to_string_lossy().to_lowercase());
+    repos.sort_by_cached_key(|path| {
+        let lower = |p: Option<&Path>| p.map_or_else(String::new, |p| p.to_string_lossy().to_lowercase());
+        let under = path.strip_prefix(root).unwrap_or(path);
+        (lower(under.parent()), lower(under.file_name().map(Path::new)))
+    });
     Ok(repos)
 }
 
@@ -225,6 +230,7 @@ mod tests {
             "Projects/website/.git",
             "Projects/website/themes/ananke/.git",
             "notes/htb/EASY/cve/.git",
+            "zeta/.git",
             "notes/Tools/payloads/.git",
             ".claude/plugins/x/.git",
         ] {
@@ -233,7 +239,9 @@ mod tests {
         let found = discover(&root, 2);
         let _ = fs::remove_dir_all(&root);
         let found: Vec<String> = found.unwrap().iter().map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().into_owned()).collect();
-        assert_eq!(found, ["dotfiles", "Pictures/bgs", "Projects/lazi", "Projects/website"]);
+        // Grouped by folder for the panel's headers: repos right in the root first, then each
+        // folder's, both alphabetical.
+        assert_eq!(found, ["dotfiles", "zeta", "Pictures/bgs", "Projects/lazi", "Projects/website"]);
     }
 
     #[test]
