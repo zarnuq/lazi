@@ -1,7 +1,10 @@
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
+use std::os::unix::fs::MetadataExt;
 use std::time::SystemTime;
 use std::{fs, io, path::Path};
+
+use crate::config::{Sort, SortBy};
 
 #[derive(Clone)]
 pub struct Entry {
@@ -9,6 +12,10 @@ pub struct Entry {
     key: String,
     pub is_dir: bool,
     pub is_link: bool,
+    /// Size and mtime (seconds since the epoch), following symlinks. Only read when sorting by
+    /// them, else 0.
+    size: u64,
+    mtime: i64,
 }
 
 pub struct Listing {
@@ -17,24 +24,25 @@ pub struct Listing {
     /// The directory's mtime when read. Creating, deleting or renaming anything inside bumps it.
     mtime: Option<SystemTime>,
     hidden: bool,
+    sort: Sort,
     /// Known to be out of date whatever the mtime says, e.g. from an inotify event landing
     /// within the same mtime tick as the last read.
     stale: bool,
 }
 
 impl Listing {
-    pub fn read(dir: &Path, show_hidden: bool) -> Self {
+    pub fn read(dir: &Path, show_hidden: bool, sort: Sort) -> Self {
         // Stat before reading, so a change made mid-read still leaves the listing stale.
         let mtime = mtime(dir);
-        let (entries, error) = match read_entries(dir, show_hidden) {
+        let (entries, error) = match read_entries(dir, show_hidden, sort) {
             Ok(entries) => (entries, None),
             Err(e) => (Vec::new(), Some(e.to_string())),
         };
-        Self { entries, error, mtime, hidden: show_hidden, stale: false }
+        Self { entries, error, mtime, hidden: show_hidden, sort, stale: false }
     }
 
-    pub fn is_fresh(&self, dir: &Path, show_hidden: bool) -> bool {
-        !self.stale && self.hidden == show_hidden && self.mtime == mtime(dir)
+    pub fn is_fresh(&self, dir: &Path, show_hidden: bool, sort: Sort) -> bool {
+        !self.stale && self.hidden == show_hidden && self.sort == sort && self.mtime == mtime(dir)
     }
 
     pub fn invalidate(&mut self) {
@@ -90,8 +98,9 @@ fn mtime(dir: &Path) -> Option<SystemTime> {
     fs::metadata(dir).and_then(|m| m.modified()).ok()
 }
 
-/// Reads `dir` sorted directories-first, then case-insensitively by name.
-fn read_entries(dir: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
+/// Reads `dir` sorted directories-first, then by `sort`.
+fn read_entries(dir: &Path, show_hidden: bool, sort: Sort) -> io::Result<Vec<Entry>> {
+    let stat = matches!(sort.by, SortBy::Size | SortBy::Mtime);
     let mut out = Vec::new();
     for ent in fs::read_dir(dir)? {
         let Ok(ent) = ent else { continue };
@@ -101,15 +110,29 @@ fn read_entries(dir: &Path, show_hidden: bool) -> io::Result<Vec<Entry>> {
         }
         let Ok(ft) = ent.file_type() else { continue };
         let is_link = ft.is_symlink();
-        // d_type answers everything except where a symlink points, so only symlinks get a stat.
-        let is_dir = if is_link {
-            fs::metadata(ent.path()).is_ok_and(|m| m.is_dir())
+        // d_type answers everything except where a symlink points, so only symlinks and sorts
+        // by size or mtime need a stat: one per entry doubles the time to list /usr/bin.
+        let meta = if is_link {
+            fs::metadata(ent.path()).ok()
+        } else if stat {
+            ent.metadata().ok()
         } else {
-            ft.is_dir()
+            None
         };
+        let is_dir = if is_link { meta.as_ref().is_some_and(fs::Metadata::is_dir) } else { ft.is_dir() };
+        let (size, mtime) = meta.map_or((0, 0), |m| (m.size(), m.mtime()));
         let key = name.to_string_lossy().to_lowercase();
-        out.push(Entry { name, key, is_dir, is_link });
+        out.push(Entry { name, key, is_dir, is_link, size, mtime });
     }
-    out.sort_unstable_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.key.cmp(&b.key)));
+    out.sort_unstable_by(|a, b| {
+        let order = match sort.by {
+            SortBy::Name => a.key.cmp(&b.key),
+            SortBy::Size => b.size.cmp(&a.size),
+            SortBy::Mtime => b.mtime.cmp(&a.mtime),
+            SortBy::Ext => Path::new(&a.key).extension().cmp(&Path::new(&b.key).extension()),
+        };
+        let order = order.then_with(|| a.key.cmp(&b.key));
+        b.is_dir.cmp(&a.is_dir).then(if sort.reverse { order.reverse() } else { order })
+    });
     Ok(out)
 }

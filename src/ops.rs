@@ -42,9 +42,11 @@ impl Op {
         let label = self.label();
         let mut errors = Vec::new();
         let mut fail = |path: &Path, e: io::Error| errors.push(format!("{}: {e}", path.display()));
-        match self {
+        // Copies count bytes as they go; everything else counts items.
+        type Each = Box<dyn Fn(&Path) -> io::Result<()>>;
+        let (paths, each): (Vec<PathBuf>, Each) = match self {
             Op::Copy { srcs, dir, force } => {
-                let (bytes, files) = srcs.iter().map(|src| size(src)).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+                let (bytes, files) = srcs.iter().map(|src| size(src)).fold((0, 0), add);
                 // Count bytes, unless it's all empty files and there are none to count.
                 let by_bytes = bytes > 0;
                 let total = if by_bytes { bytes } else { files };
@@ -58,37 +60,19 @@ impl Op {
                         fail(src, e);
                     }
                 }
+                return errors;
             }
-            Op::Move { srcs, dir, force } => {
-                let mut progress = Progress { label, done: 0, total: srcs.len() as u64, bytes: false };
-                for src in &srcs {
-                    if let Err(e) = paste(src, &dir, force, true, &mut |_| {}) {
-                        fail(src, e);
-                    }
-                    progress.done += 1;
-                    report(progress);
-                }
+            Op::Move { srcs, dir, force } => (srcs, Box::new(move |src| paste(src, &dir, force, true, &mut |_| {}))),
+            Op::Trash(paths) => (paths, Box::new(trash)),
+            Op::Delete(paths) => (paths, Box::new(remove)),
+        };
+        let mut progress = Progress { label, done: 0, total: paths.len() as u64, bytes: false };
+        for path in &paths {
+            if let Err(e) = each(path) {
+                fail(path, e);
             }
-            Op::Trash(paths) => {
-                let mut progress = Progress { label, done: 0, total: paths.len() as u64, bytes: false };
-                for path in &paths {
-                    if let Err(e) = trash(path) {
-                        fail(path, e);
-                    }
-                    progress.done += 1;
-                    report(progress);
-                }
-            }
-            Op::Delete(paths) => {
-                let mut progress = Progress { label, done: 0, total: paths.len() as u64, bytes: false };
-                for path in &paths {
-                    if let Err(e) = remove(path) {
-                        fail(path, e);
-                    }
-                    progress.done += 1;
-                    report(progress);
-                }
-            }
+            progress.done += 1;
+            report(progress);
         }
         errors
     }
@@ -173,12 +157,17 @@ fn size(path: &Path) -> (u64, u64) {
     let Ok(meta) = fs::symlink_metadata(path) else { return (0, 0) };
     if meta.is_dir() {
         let entries = fs::read_dir(path).into_iter().flatten().flatten();
-        entries.map(|ent| size(&ent.path())).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1))
+        entries.map(|ent| size(&ent.path())).fold((0, 0), add)
     } else if meta.is_file() {
         (meta.len(), 1)
     } else {
         (0, 0)
     }
+}
+
+/// Sums two (bytes, files) counts from `size`.
+fn add(a: (u64, u64), b: (u64, u64)) -> (u64, u64) {
+    (a.0 + b.0, a.1 + b.1)
 }
 
 fn exists(path: &Path) -> bool {
@@ -277,13 +266,8 @@ fn url_encode(path: &Path) -> String {
 
 /// Local time as YYYY-MM-DDThh:mm:ss.
 fn local_now() -> String {
-    // SAFETY: time() with a null pointer only returns; localtime_r writes into our zeroed tm.
-    let tm = unsafe {
-        let t = libc::time(ptr::null_mut());
-        let mut tm: libc::tm = mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        tm
-    };
+    // SAFETY: time() with a null pointer only returns.
+    let tm = local_time(unsafe { libc::time(ptr::null_mut()) });
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
         tm.tm_year + 1900,
@@ -293,4 +277,14 @@ fn local_now() -> String {
         tm.tm_min,
         tm.tm_sec
     )
+}
+
+/// Seconds since the epoch in the local timezone.
+pub fn local_time(t: libc::time_t) -> libc::tm {
+    // SAFETY: localtime_r only writes into our zeroed tm.
+    unsafe {
+        let mut tm: libc::tm = mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        tm
+    }
 }

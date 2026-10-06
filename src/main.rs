@@ -187,6 +187,8 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: &Action) -> io::Resu
         Action::Back => app.back(),
         Action::Forward => app.forward(),
         Action::ToggleHidden => app.toggle_hidden(),
+        Action::CycleSort => app.cycle_sort(),
+        Action::ReverseSort => app.reverse_sort(),
         Action::Goto(dir) => app.goto(dir),
         Action::Open | Action::OpenWith => {
             let files = app.targets();

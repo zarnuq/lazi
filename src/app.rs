@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::{self, Opener, Part};
+use crate::config::{self, Opener, Part, Sort, SortBy};
 use crate::fs::{Entry, Listing, Matcher};
 use crate::input::Input;
 use crate::kitty::{self, Kitty};
@@ -115,6 +115,7 @@ pub struct App {
     pub tasks: BTreeMap<u64, Progress>,
     next_task: u64,
     show_hidden: bool,
+    sort: Sort,
     cache: HashMap<PathBuf, Listing>,
     loading: HashSet<PathBuf>,
     /// The name the cursor was last on in each visited directory.
@@ -156,6 +157,7 @@ impl App {
             tasks: BTreeMap::new(),
             next_task: 0,
             show_hidden: config::get().show_hidden,
+            sort: config::get().sort,
             cache: HashMap::new(),
             loading: HashSet::new(),
             hovered: HashMap::new(),
@@ -172,7 +174,7 @@ impl App {
             previewer,
         };
         // The cwd is read inline: there is nothing to draw without it anyway.
-        let listing = Listing::read(&app.cwd, app.show_hidden);
+        let listing = Listing::read(&app.cwd, app.show_hidden, app.sort);
         app.cache.insert(app.cwd.clone(), listing);
         app.remember();
         app.refresh();
@@ -203,8 +205,7 @@ impl App {
 
     /// The hovered directory, shown in the preview column.
     pub fn preview_dir(&self) -> Option<PathBuf> {
-        let entry = self.entries().get(self.cursor)?;
-        entry.is_dir.then(|| self.cwd.join(&entry.name))
+        self.hovered().and_then(|(path, is_dir)| is_dir.then_some(path))
     }
 
     pub fn is_loading(&self) -> bool {
@@ -380,6 +381,28 @@ impl App {
         self.refresh();
     }
 
+    pub fn cycle_sort(&mut self) {
+        self.sort.by = match self.sort.by {
+            SortBy::Name => SortBy::Size,
+            SortBy::Size => SortBy::Mtime,
+            SortBy::Mtime => SortBy::Ext,
+            SortBy::Ext => SortBy::Name,
+        };
+        self.resort();
+    }
+
+    pub fn reverse_sort(&mut self) {
+        self.sort.reverse = !self.sort.reverse;
+        self.resort();
+    }
+
+    /// Listings in the old order count as stale, so this rereads them like toggling hidden files.
+    fn resort(&mut self) {
+        let by = format!("{:?}", self.sort.by).to_lowercase();
+        self.info = Some(format!("sort by {by}{}", if self.sort.reverse { ", reversed" } else { "" }));
+        self.refresh();
+    }
+
     /// Keeps the cursor at least `scrolloff` rows from the edges of the listing.
     pub fn scroll(&mut self) {
         let height = self.height;
@@ -477,7 +500,7 @@ impl App {
     }
 
     pub fn start_create(&mut self) {
-        self.prompt = Some(Prompt::Create(Input::new(String::new(), 0)));
+        self.prompt = Some(Prompt::Create(Input::default()));
     }
 
     /// Starts renaming the hovered entry, with the cursor before the extension.
@@ -576,8 +599,7 @@ impl App {
         };
         let dir = self.cwd.join(&enter.name);
         self.cd(dir);
-        let input = Input::new(String::new(), 0);
-        self.prompt = Some(Prompt::Find { input, backward, origin: self.cursor });
+        self.start_find(backward);
     }
 
     /// Steps to the next match while the find prompt stays open; `reverse` goes against the
@@ -596,7 +618,7 @@ impl App {
     }
 
     pub fn start_find(&mut self, backward: bool) {
-        let input = Input::new(String::new(), 0);
+        let input = Input::default();
         self.prompt = Some(Prompt::Find { input, backward, origin: self.cursor });
     }
 
@@ -873,14 +895,14 @@ impl App {
     }
 
     fn ensure(&mut self, dir: &Path) {
-        let fresh = self.cache.get(dir).is_some_and(|l| l.is_fresh(dir, self.show_hidden));
+        let fresh = self.cache.get(dir).is_some_and(|l| l.is_fresh(dir, self.show_hidden, self.sort));
         if fresh || self.loading.contains(dir) {
             return;
         }
         self.loading.insert(dir.to_path_buf());
-        let (dir, notify, hidden) = (dir.to_path_buf(), self.notify.clone(), self.show_hidden);
+        let (dir, notify, hidden, sort) = (dir.to_path_buf(), self.notify.clone(), self.show_hidden, self.sort);
         thread::spawn(move || {
-            let listing = Listing::read(&dir, hidden);
+            let listing = Listing::read(&dir, hidden, sort);
             notify.send(Msg::Listed(dir, listing));
         });
     }

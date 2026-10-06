@@ -8,6 +8,9 @@
 // snippets.
 (
     show_hidden: true,
+    // Order after directories, which always come first: Name, Size (biggest first), Mtime
+    // (newest first) or Ext; `reverse` flips it. Ties go by name.
+    sort: (by: Name, reverse: false),
     // Width ratio of the parent, current and preview columns.
     ratio: (2, 5, 8),
     // Rows kept between the cursor and the edge when scrolling.
@@ -44,6 +47,14 @@
         mark_selected: (bg: "yellow"),
         mark_copied: (bg: "green"),
         mark_cut: (bg: "red"),
+        // Names of plain files by lowercase extension, the first match winning; others keep
+        // the terminal's colour. Directories and links use `dir` and `link` above.
+        files: [
+            (ext: ["zip", "tar", "gz", "tgz", "bz2", "xz", "txz", "zst", "7z", "rar", "iso", "cpio", "lz4", "deb", "rpm"], style: (fg: "red")),
+            (ext: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "svg", "avif", "heic", "ico", "jxl"], style: (fg: "yellow")),
+            (ext: ["mp4", "mkv", "webm", "mov", "avi", "m4v", "flv", "wmv", "mp3", "flac", "ogg", "opus", "wav", "m4a", "aac", "wma"], style: (fg: "magenta")),
+            (ext: ["pdf", "epub", "djvu", "doc", "docx", "odt", "xls", "xlsx", "ods", "ppt", "pptx", "odp"], style: (fg: "cyan")),
+        ],
     ),
 
     // Glyphs before each name, from a Nerd Font. Each gets one cell plus a space after it;
@@ -258,6 +269,9 @@
             "H": Back,
             "L": Forward,
             ".": ToggleHidden,
+            // Name, size, mtime, extension, and round again.
+            "s": CycleSort,
+            "S": ReverseSort,
             // A leading ~ is $HOME; anything else is relative to the current directory.
             "gh": Goto("~"),
             "gc": Goto("~/.config"),

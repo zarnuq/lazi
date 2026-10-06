@@ -18,6 +18,7 @@ use serde::{Deserialize, Deserializer};
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub show_hidden: bool,
+    pub sort: Sort,
     /// Width ratio of the parent, current and preview columns.
     pub ratio: (u16, u16, u16),
     pub scrolloff: usize,
@@ -65,6 +66,37 @@ pub struct Styles {
     pub mark_copied: Style,
     #[serde(deserialize_with = "style")]
     pub mark_cut: Style,
+    /// Names of plain files by type, as yazi colours archives, images and so on.
+    pub files: Vec<FileStyle>,
+}
+
+/// The style for files with any of `ext` (lowercase). The first match wins.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileStyle {
+    pub ext: Vec<String>,
+    #[serde(deserialize_with = "style")]
+    pub style: Style,
+}
+
+/// How entries are ordered after directories, which always come first. Ties go by name.
+#[derive(Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sort {
+    pub by: SortBy,
+    pub reverse: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug, Deserialize)]
+pub enum SortBy {
+    /// Case-insensitive.
+    Name,
+    /// Biggest first.
+    Size,
+    /// Newest first.
+    Mtime,
+    /// Lowercase extension, files without one first.
+    Ext,
 }
 
 /// Glyphs drawn before names, e.g. from a Nerd Font. A directory gets its entry in `dirs`, else
@@ -195,6 +227,9 @@ pub enum Action {
     Back,
     Forward,
     ToggleHidden,
+    /// Name, size, mtime, extension, and round again.
+    CycleSort,
+    ReverseSort,
     /// Go to a directory; a leading `~` is $HOME.
     Goto(String),
     /// Run the first opener for the targets.

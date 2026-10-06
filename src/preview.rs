@@ -6,7 +6,7 @@ use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
@@ -273,10 +273,7 @@ fn fit(img: DynamicImage, req: &Request) -> Preview {
 /// in $PAGE, returning at
 /// most `limit` bytes of its stdout. It's killed if it takes longer than the preview timeout.
 fn run(script: &str, req: &Request, limit: u64) -> Result<Vec<u8>, String> {
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(script)
-        .arg("sh")
+    let mut child = open::sh(script)
         .arg(&req.path)
         .env("COLUMNS", req.cols.to_string())
         .env("LINES", req.rows.to_string())
@@ -299,8 +296,7 @@ fn run(script: &str, req: &Request, limit: u64) -> Result<Vec<u8>, String> {
     }
     read.map_err(|e| e.to_string())?;
     if out.is_empty() {
-        let last = err.lines().rev().find(|l| !l.trim().is_empty()).map(str::trim);
-        return Err(last.map_or_else(|| format!("no output ({status})"), str::to_owned));
+        return Err(open::last_line(&err).map_or_else(|| format!("no output ({status})"), str::to_owned));
     }
     Ok(out)
 }

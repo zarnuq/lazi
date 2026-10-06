@@ -55,9 +55,8 @@ pub fn run(
     cwd: &Path,
     on_fail: Box<dyn FnOnce(String) + Send>,
 ) -> io::Result<Option<String>> {
-    let mut command = Command::new("sh");
-    // Same calling convention as yazi: the files are "$@" to the snippet.
-    command.arg("-c").arg(cmd.script).arg("sh").args(cmd.args).current_dir(cwd);
+    let mut command = sh(cmd.script);
+    command.args(cmd.args).current_dir(cwd);
 
     if cmd.block {
         suspend(term)?;
@@ -93,10 +92,21 @@ pub fn run(
         if let Some(mut log) = log {
             let _ = log.rewind().and_then(|()| log.read_to_string(&mut text));
         }
-        let last = text.lines().rev().find(|l| !l.trim().is_empty()).map(str::trim);
-        on_fail(format!("{desc}: {}", last.map_or_else(|| status.to_string(), str::to_owned)));
+        on_fail(format!("{desc}: {}", last_line(&text).map_or_else(|| status.to_string(), str::to_owned)));
     });
     Ok(None)
+}
+
+/// A `sh -c` snippet; further args become its "$@", the same calling convention as yazi.
+pub fn sh(script: &str) -> Command {
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(script).arg("sh");
+    command
+}
+
+/// The last non-blank line of a program's stderr, which is usually the actual error.
+pub fn last_line(text: &str) -> Option<&str> {
+    text.lines().rev().find(|l| !l.trim().is_empty()).map(str::trim)
 }
 
 fn stderr_log() -> Option<File> {
@@ -110,10 +120,7 @@ fn stderr_log() -> Option<File> {
 pub fn capture(term: &mut DefaultTerminal, script: &str, args: &[PathBuf], cwd: &Path) -> io::Result<Option<String>> {
     suspend(term)?;
     // output() would give it an empty stdin, which fzf reads as its (empty) list of choices.
-    let out = Command::new("sh")
-        .arg("-c")
-        .arg(script)
-        .arg("sh")
+    let out = sh(script)
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::inherit())

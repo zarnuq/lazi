@@ -1,5 +1,7 @@
 use std::env;
 use std::ffi::OsStr;
+use std::fs::{self, Metadata};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use ratatui::Frame;
@@ -12,6 +14,7 @@ use crate::app::{App, Mark, Menu, Prompt};
 use crate::config::{self, Icon, Icons};
 use crate::fs::{Entry, Listing, Matcher};
 use crate::input::Input;
+use crate::ops;
 use crate::preview::Preview;
 
 /// Row 0 is the cwd, the last row is the status line, and the three columns fill the middle.
@@ -132,9 +135,35 @@ fn draw_status(buf: &mut Buffer, area: Rect, app: &App) -> Option<(u16, u16)> {
         buf.set_stringn(area.x, area.y, tasks.join(" · "), width, Style::new());
     } else if app.is_loading() {
         buf.set_stringn(area.x, area.y, "loading…", width, config::get().style.dim);
+    } else if let Some(entry) = app.entries().get(app.cursor) {
+        // One stat per frame, and frames only follow events.
+        let path = app.cwd.join(&entry.name);
+        if let Ok(meta) = fs::metadata(&path).or_else(|_| fs::symlink_metadata(&path)) {
+            buf.set_stringn(area.x, area.y, details(entry, &meta), width, config::get().style.dim);
+        }
     }
 
     None
+}
+
+/// Permissions, size (files only) and mtime, like `ls -l`.
+fn details(entry: &Entry, meta: &Metadata) -> String {
+    let kind = if entry.is_link { 'l' } else if entry.is_dir { 'd' } else { '-' };
+    let perms: String = (0..9).rev().map(|bit| if meta.mode() >> bit & 1 == 1 { b"xwr"[bit % 3] as char } else { '-' }).collect();
+    let size = if entry.is_dir { String::new() } else { format!("{}  ", human(meta.size())) };
+    let tm = ops::local_time(meta.mtime());
+    let (year, month, day, hour, min) = (tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
+    format!("{kind}{perms}  {size}{year:04}-{month:02}-{day:02} {hour:02}:{min:02}")
+}
+
+/// Bytes in powers of 1024, one decimal past the first unit.
+fn human(bytes: u64) -> String {
+    let (mut size, mut unit) = (bytes as f64, 0);
+    while size >= 1024.0 && unit < 5 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 { format!("{bytes}B") } else { format!("{size:.1}{}", ["", "K", "M", "G", "T", "P"][unit]) }
 }
 
 /// A centred box listing the openers, numbered for quick picking.
@@ -224,28 +253,30 @@ fn draw_side(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, listing: &List
 
 /// `find` highlights matching names.
 fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, find: Option<&Matcher>) {
+    let styles = &config::get().style;
     let width = area.width.saturating_sub(2) as usize;
     if let Some(err) = list.error {
-        buf.set_stringn(area.x + 1, area.y, err, width, config::get().style.error);
+        buf.set_stringn(area.x + 1, area.y, err, width, styles.error);
         return;
     }
     let rows = list.entries.iter().enumerate().skip(list.offset).take(area.height as usize);
     for (y, (i, entry)) in (area.y..).zip(rows) {
         let base = if entry.is_dir {
-            config::get().style.dir
+            styles.dir
         } else if entry.is_link {
-            config::get().style.link
+            styles.link
         } else {
-            Style::new()
+            let ext = Path::new(&entry.name).extension().and_then(OsStr::to_str).map(str::to_ascii_lowercase);
+            ext.and_then(|ext| styles.files.iter().find(|f| f.ext.contains(&ext))).map_or(Style::new(), |f| f.style)
         };
         let mut style = base;
         if find.is_some_and(|m| m.matches(entry)) {
-            style = style.patch(config::get().style.find);
+            style = style.patch(styles.find);
         }
         let on_cursor = Some(i) == list.cursor;
         if on_cursor {
-            buf.set_style(Rect { y, height: 1, ..area }, config::get().style.cursor);
-            style = style.patch(config::get().style.cursor);
+            buf.set_style(Rect { y, height: 1, ..area }, styles.cursor);
+            style = style.patch(styles.cursor);
         }
         let (mut x, mut width) = (area.x + 1, width);
         if let Some(icon) = config::get().icons.as_ref().map(|icons| icon(icons, entry))
@@ -254,7 +285,7 @@ fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, fi
             // Not underlined with a find match, and on the cursor row plain cursor colours:
             // the icon's own colour there would turn into a block of it under reverse video.
             let icon_style = if on_cursor {
-                base.patch(config::get().style.cursor)
+                base.patch(styles.cursor)
             } else {
                 icon.fg.map_or(base, |fg| base.fg(fg))
             };
@@ -276,9 +307,9 @@ fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, fi
             // Reset first so the cursor's reverse video doesn't swap the colour away.
             cell.reset();
             cell.set_style(match mark {
-                Mark::Selected => config::get().style.mark_selected,
-                Mark::Copied => config::get().style.mark_copied,
-                Mark::Cut => config::get().style.mark_cut,
+                Mark::Selected => styles.mark_selected,
+                Mark::Copied => styles.mark_copied,
+                Mark::Cut => styles.mark_cut,
             });
         }
     }

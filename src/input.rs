@@ -4,6 +4,7 @@ use ratatui::text::Span;
 
 use crate::config::PromptAction;
 
+#[derive(Default)]
 pub struct Input {
     pub text: String,
     /// Byte offset, always on a char boundary.

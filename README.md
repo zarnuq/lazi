@@ -145,6 +145,7 @@ These are the bindings in the example `config.ron`.
 | `H` `L` | Back / forward in history |
 | `gh` `gc` `gd` | Go to `~`, `~/.config`, `~/Downloads` |
 | `.` | Toggle hidden files |
+| `s` / `S` | Cycle sort (name, size, mtime, extension) / reverse it |
 | `o` / `Enter` | Open with the first opener |
 | `O` | Open with… (menu: `j`/`k`, `Enter` or `1`–`9`) |
 | `Space` | Select and move down |
