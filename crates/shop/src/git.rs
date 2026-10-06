@@ -3,12 +3,13 @@
 //! inotify on each repo's `.git`.
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Read};
+use std::os::unix::process::CommandExt;
 use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{env, mem, slice, thread};
 
 use lazi::wake::{self, Waker};
@@ -21,6 +22,12 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::config::{GitAction, GitSpec, GitStyles, GitSymbols};
 use crate::status::{self, Status};
+
+/// A status is local and takes milliseconds; one this slow is stuck (a dead network mount).
+const STATUS_LIMIT: Duration = Duration::from_secs(10);
+/// A fetch past this is a stalled connection (a suspend mid-fetch); without a limit the repo
+/// would never be fetched again.
+const FETCH_LIMIT: Duration = Duration::from_secs(60);
 
 /// Work for the worker thread.
 enum Job {
@@ -428,7 +435,7 @@ fn worker(jobs: Receiver<Job>, notify: Notifier) {
         match job {
             Job::Status(repos) => {
                 for path in repos {
-                    let result = git(&path, &["status", "--porcelain=v2", "--branch"]).map(|out| status::parse(&out));
+                    let result = git(&path, &["status", "--porcelain=v2", "--branch"], STATUS_LIMIT).map(|out| status::parse(&out));
                     if !notify.send(Msg::Status(path, result)) {
                         return;
                     }
@@ -438,7 +445,7 @@ fn worker(jobs: Receiver<Job>, notify: Notifier) {
                 for path in repos {
                     let notify = notify.clone();
                     thread::spawn(move || {
-                        let result = git(&path, &["fetch", "--quiet", "--prune"]).map(drop);
+                        let result = git(&path, &["fetch", "--quiet", "--prune"], FETCH_LIMIT).map(drop);
                         notify.send(Msg::Fetched(path, result));
                     });
                 }
@@ -448,24 +455,68 @@ fn worker(jobs: Receiver<Job>, notify: Notifier) {
 }
 
 /// Runs git in `repo`: its stdout, or its last stderr line.
-fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let mut cmd = Command::new("git");
-    cmd.args(args).current_dir(repo).stdin(Stdio::null());
-    // Nothing may prompt on shop's terminal: a fetch that needs a password fails instead.
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
-    if env::var_os("GIT_SSH_COMMAND").is_none() {
-        cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
-    }
+fn git(repo: &Path, args: &[&str], limit: Duration) -> Result<String, String> {
+    run("git", args, repo, limit).map_err(|e| format!("git {}: {e}", args[0]))
+}
+
+/// Runs `program` in `dir`: its stdout, or its last stderr line. Killed, with everything it
+/// started, once it outlives `limit`.
+fn run(program: &str, args: &[&str], dir: &Path, limit: Duration) -> Result<String, String> {
+    let mut cmd = Command::new(program);
+    cmd.args(args).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // Nothing may ask for a password: no terminal prompt, and an empty GIT_ASKPASS makes git
+    // skip core.askPass and SSH_ASKPASS too, so no GUI dialog pops up every fetch round. ssh
+    // gets the same from SSH_ASKPASS_REQUIRE. The user's own ssh command stays as configured.
+    cmd.env("GIT_TERMINAL_PROMPT", "0").env("GIT_ASKPASS", "").env("SSH_ASKPASS_REQUIRE", "never");
     // status would otherwise refresh the index, a write to .git that the watcher would see
     // and answer with another status, forever.
     cmd.env("GIT_OPTIONAL_LOCKS", "0");
-    let out = cmd.output().map_err(|e| format!("git: {e}"))?;
-    if out.status.success() {
-        return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
+    // SAFETY: setsid is async-signal-safe and touches no memory of ours. A session of its own
+    // leaves git, and ssh under it, without a controlling terminal, so neither can open
+    // /dev/tty to ask for a passphrase or a host key, and Ctrl+C in shop's terminal (during a
+    // blocking Run, say) doesn't reach it. It also makes the child's pid its group's id, which
+    // the timeout below kills.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
     }
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let line = stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).map_or_else(|| out.status.to_string(), str::to_owned);
-    Err(format!("git {}: {line}", args[0]))
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    // Drain both pipes on threads, so a chatty command can't fill one and stall.
+    let read = |mut pipe: Box<dyn Read + Send>| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = pipe.read_to_end(&mut bytes);
+            bytes
+        })
+    };
+    let stdout = child.stdout.take().map(|p| read(Box::new(p)));
+    let stderr = child.stderr.take().map(|p| read(Box::new(p)));
+    let deadline = Instant::now() + limit;
+    // ponytail: polls every 50ms on this worker thread while the command runs (fetches take
+    // ~0.5s); a pidfd in poll(2) would wait without waking if it ever matters.
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            // SAFETY: no pointer arguments. The child isn't reaped yet, so its pid, which is
+            // also its process group's id, can't have been reused.
+            unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+            let _ = child.wait();
+            break None;
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    let stdout = stdout.and_then(|t| t.join().ok()).unwrap_or_default();
+    let stderr = stderr.and_then(|t| t.join().ok()).unwrap_or_default();
+    let Some(status) = status else { return Err(format!("timed out after {}s", limit.as_secs_f32())) };
+    if status.success() {
+        return Ok(String::from_utf8_lossy(&stdout).into_owned());
+    }
+    let stderr = String::from_utf8_lossy(&stderr);
+    Err(stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).map_or_else(|| status.to_string(), str::to_owned))
 }
 
 fn name(path: &Path) -> String {
@@ -491,4 +542,33 @@ fn clock() -> String {
     // SAFETY: both pointers are to live locals of the right types.
     unsafe { libc::localtime_r(&now, &mut tm) };
     format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_kills_a_command_that_outlives_its_limit() {
+        let start = Instant::now();
+        let result = run("sleep", &["3"], Path::new("/"), Duration::from_millis(200));
+        assert!(start.elapsed() < Duration::from_secs(2), "waited {:?}", start.elapsed());
+        assert!(result.unwrap_err().contains("timed out"));
+    }
+
+    /// git must find no way to ask for a password: no askpass program (a GUI dialog every
+    /// fetch round), and the user's own ssh command left alone.
+    #[test]
+    fn run_turns_off_askpass_and_keeps_the_ssh_command() {
+        let check = r#"[ "${GIT_ASKPASS+set}" = set ] && [ -z "$GIT_ASKPASS" ] && [ "$SSH_ASKPASS_REQUIRE" = never ] && [ "$GIT_SSH_COMMAND" = "${OUTER_SSH-}" ]"#;
+        let outer = env::var("GIT_SSH_COMMAND").unwrap_or_default();
+        let script = format!("OUTER_SSH='{outer}'; {check}");
+        assert!(run("sh", &["-c", &script], Path::new("/"), Duration::from_secs(5)).is_ok());
+    }
+
+    /// Without a controlling terminal, ssh can't open /dev/tty to ask for a passphrase.
+    #[test]
+    fn run_leaves_no_terminal_to_prompt_on() {
+        assert!(run("sh", &["-c", ": </dev/tty"], Path::new("/"), Duration::from_secs(5)).is_err());
+    }
 }

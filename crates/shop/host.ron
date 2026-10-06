@@ -23,7 +23,8 @@
                 arrows: (fg: "#fab387"),
                 clean: (fg: "#a6e3a1"),
                 error: (fg: "#f38ba8"),
-                cursor: (reversed: true),
+                // A background, not reversed: reversing turns every coloured span into a block.
+                cursor: (bg: "#45475a"),
             ),
             keys: {
                 "j": Down, "k": Up, "Down": Down, "Up": Up, "g g": Top, "G": Bottom,
@@ -31,6 +32,7 @@
                 "r": Refresh,
                 "g l": Run(run: "lazygit", block: true),
                 "p": Run(run: "git pull --ff-only", block: true),
+                "t": Run(run: r#"kitty --directory "$1""#, block: false),
                 "c": Run(run: r#"kitty --directory "$1" claude"#, block: false),
                 "x": Run(run: r#"kitty --directory "$1" codex"#, block: false),
             },
