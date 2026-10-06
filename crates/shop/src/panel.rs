@@ -34,6 +34,21 @@ impl Panel {
         }
     }
 
+    pub fn lazi(&self) -> Option<&Lazi> {
+        match self {
+            Panel::Lazi(p) => Some(p),
+            Panel::Git(_) => None,
+        }
+    }
+
+    /// Whether the panel is taking text, so shop leaves every key to it.
+    pub fn wants_text(&self) -> bool {
+        match self {
+            Panel::Lazi(p) => p.wants_text(),
+            Panel::Git(_) => false,
+        }
+    }
+
     /// The panel's own key bindings, as (keys, action).
     pub fn help(&self) -> Vec<(String, String)> {
         match self {

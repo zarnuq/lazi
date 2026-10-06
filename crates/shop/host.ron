@@ -48,16 +48,16 @@
         tab: (fg: "gray"),
         tab_focused: (fg: "black", bg: "blue"),
     ),
-    // Keys are written as in lazi's config.ron. shop looks at every key first; whatever no
-    // binding here claims goes to the focused panel, so use chords the panels don't (lazi and
-    // the git panel bind no Alt keys).
-    //   Next, Prev: the neighbouring panel, wrapping.
-    //   Focus(n): the panel at position n in `panels`, from 0.
-    //   Quit: quit shop. A panel's own quit (lazi's q) also quits shop.
+    // Keys are written as in lazi's config.ron. shop looks at every key first, except while a
+    // panel takes text (a lazi prompt or its opener menu); whatever no binding here claims goes
+    // to the focused panel.
+    //   Next, Prev: the neighbouring panel, wrapping. (lazi binds H and L to its own.)
+    //   Focus(n): the tab at position n, from 0; the tab bar numbers them from 1.
+    //   Quit: quit shop. lazi's q closes a lazi tab, and quits shop on the last one.
     keys: {
-        "Alt+1": Focus(0),
-        "Alt+2": Focus(1),
-        "Alt+q": Quit,
+        "1": Focus(0), "2": Focus(1), "3": Focus(2), "4": Focus(3), "5": Focus(4),
+        "6": Focus(5), "7": Focus(6), "8": Focus(7), "9": Focus(8),
+        "Ctrl+c": Quit,
     },
     // While the ? menu of key bindings is up. Other keys do nothing.
     help_keys: {

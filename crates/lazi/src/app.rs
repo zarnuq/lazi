@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use std::io::{self, Write};
 use std::os::fd::RawFd;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -85,6 +86,15 @@ pub struct Filter {
     entries: Vec<Entry>,
 }
 
+/// The copy/cut register, one per process like yazi's, so every lazi tab in shop pastes what
+/// any of them yanked.
+static YANK: Mutex<Option<Yank>> = Mutex::new(None);
+
+fn register() -> MutexGuard<'static, Option<Yank>> {
+    // A panic elsewhere while holding it leaves the register itself intact.
+    YANK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 pub struct Yank {
     pub paths: BTreeSet<PathBuf>,
     pub cut: bool,
@@ -111,7 +121,6 @@ pub struct App {
     pub menu: Option<Menu>,
     pub prompt: Option<Prompt>,
     pub selected: BTreeSet<PathBuf>,
-    pub yank: Option<Yank>,
     pub tasks: BTreeMap<u64, Progress>,
     next_task: u64,
     show_hidden: bool,
@@ -153,7 +162,6 @@ impl App {
             menu: None,
             prompt: None,
             selected: BTreeSet::new(),
-            yank: None,
             tasks: BTreeMap::new(),
             next_task: 0,
             show_hidden: config::get().show_hidden,
@@ -303,14 +311,15 @@ impl App {
 
     /// How `entry` in `dir` should be marked: selection wins over the yank register.
     pub fn mark(&self, dir: &Path, entry: &Entry) -> Option<Mark> {
-        if self.selected.is_empty() && self.yank.is_none() {
+        let yank = register();
+        if self.selected.is_empty() && yank.is_none() {
             return None;
         }
         let path = dir.join(&entry.name);
         if self.selected.contains(&path) {
             return Some(Mark::Selected);
         }
-        match &self.yank {
+        match &*yank {
             Some(yank) if yank.paths.contains(&path) => Some(if yank.cut { Mark::Cut } else { Mark::Copied }),
             _ => None,
         }
@@ -462,20 +471,24 @@ impl App {
         let paths = self.targets();
         if !paths.is_empty() {
             self.selected.clear();
-            self.yank = Some(Yank { paths: paths.into_iter().collect(), cut });
+            *register() = Some(Yank { paths: paths.into_iter().collect(), cut });
         }
     }
 
     pub fn unyank(&mut self) {
-        self.yank = None;
+        *register() = None;
     }
 
     pub fn paste(&mut self, force: bool) {
-        let Some(yank) = &self.yank else { return };
-        let (srcs, dir) = (yank.paths.iter().cloned().collect(), self.cwd.clone());
-        let op = if yank.cut {
+        let mut yank = register();
+        let Some(Yank { paths, cut }) = &*yank else { return };
+        let (srcs, dir, cut) = (paths.iter().cloned().collect(), self.cwd.clone(), *cut);
+        if cut {
             // The sources won't be there any more.
-            self.yank = None;
+            *yank = None;
+        }
+        drop(yank);
+        let op = if cut {
             Op::Move { srcs, dir, force }
         } else {
             Op::Copy { srcs, dir, force }

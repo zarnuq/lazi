@@ -45,6 +45,10 @@ pub enum Outcome {
     Open(PathBuf),
     /// Show the key bindings.
     Help,
+    /// Open another lazi tab in this directory.
+    NewTab(PathBuf),
+    NextTab,
+    PrevTab,
 }
 
 pub struct Lazi {
@@ -68,6 +72,12 @@ impl Lazi {
 
     pub fn cwd(&self) -> &Path {
         &self.app.cwd
+    }
+
+    /// Whether keys are text right now (a prompt or the opener menu is up), so a host shouldn't
+    /// claim any of them for itself.
+    pub fn wants_text(&self) -> bool {
+        self.app.prompt.is_some() || self.app.menu.is_some()
     }
 
     /// Every normal-mode binding, as (keys, action), for the help menu.
@@ -167,6 +177,9 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: &Action) -> io::Resu
         Action::Quit => return Ok(Outcome::Quit),
         Action::QuitNoCwd => return Ok(Outcome::QuitNoCwd),
         Action::Help => return Ok(Outcome::Help),
+        Action::NewTab => return Ok(Outcome::NewTab(app.cwd.clone())),
+        Action::NextTab => return Ok(Outcome::NextTab),
+        Action::PrevTab => return Ok(Outcome::PrevTab),
         Action::Move(delta) => app.move_by(*delta),
         Action::Page(percent) => app.page(*percent),
         Action::Top => app.move_to(0),

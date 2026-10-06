@@ -245,7 +245,6 @@
             "q": Quit,
             // Without writing --cwd-file, so the shell stays where it was.
             "Q": QuitNoCwd,
-            "Ctrl+c": Quit,
             "k": Move(-1),
             "j": Move(1),
             "Up": Move(-1),
@@ -266,8 +265,13 @@
             "Left": Leave,
             "Right": Enter,
             // History.
-            "H": Back,
-            "L": Forward,
+            "Shift+Tab": Back,
+            "Tab": Forward,
+            // Tabs live in shop: t opens one here, H and L move between them, q closes one
+            // (shop quits on the last).
+            "t": NewTab,
+            "H": PrevTab,
+            "L": NextTab,
             ".": ToggleHidden,
             // Name, size, mtime, extension, and round again.
             "s": CycleSort,

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{env, io, mem, process};
 
-use lazi::{Key, LOAD_GRACE, Lookup, Outcome, wake};
+use lazi::{Key, LOAD_GRACE, Lazi, Lookup, Outcome, wake};
 use ratatui::DefaultTerminal;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -99,10 +99,8 @@ fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBu
     }
     ratatui::restore();
 
-    let lazi = shop.panels.iter().find_map(|p| match p {
-        Panel::Lazi(lazi) => Some(lazi),
-        _ => None,
-    });
+    // The cwd file gets the tab shop was left on, or the first lazi tab when that was git.
+    let lazi = shop.panels.get(shop.focus).and_then(Panel::lazi).or_else(|| shop.panels.iter().find_map(Panel::lazi));
     match res.map_err(|e| e.to_string())? {
         Exit::Quit => {
             if let (Some(path), Some(lazi)) = (cwd_file, lazi) {
@@ -118,11 +116,6 @@ fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBu
 fn run(term: &mut DefaultTerminal, shop: &mut Shop, bench: Option<Instant>) -> io::Result<Exit> {
     let (tty, _tty_file) = wake::tty()?;
     let winch = wake::winch()?;
-    let mut fds = vec![tty, winch.as_raw_fd()];
-    for panel in &shop.panels {
-        fds.extend(panel.wake_fds());
-    }
-
     let mut dirty = true;
     loop {
         if dirty {
@@ -141,6 +134,11 @@ fn run(term: &mut DefaultTerminal, shop: &mut Shop, bench: Option<Instant>) -> i
         // Sleep until a key, a panel's worker or watcher, or a resize, unless crossterm already
         // has input buffered from an earlier read.
         if !event::poll(Duration::ZERO)? {
+            // Built each time round: tabs come and go.
+            let mut fds = vec![tty, winch.as_raw_fd()];
+            for panel in &shop.panels {
+                fds.extend(panel.wake_fds());
+            }
             wake::wait(&fds)?;
         }
         dirty |= wake::drain(winch.as_raw_fd());
@@ -202,7 +200,15 @@ fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<O
         return Ok(None);
     }
     let len = shop.panels.len();
-    let next = match route(&shop.config.keys, &mut shop.pending, key) {
+    // While a panel takes text (a lazi prompt or its opener menu), digits and letters are typing,
+    // not shop's tab keys.
+    let routed = if shop.panels[shop.focus].wants_text() {
+        shop.pending.clear();
+        Route::Panel(vec![key])
+    } else {
+        route(&shop.config.keys, &mut shop.pending, key)
+    };
+    let next = match routed {
         Route::Wait => return Ok(None),
         Route::Shop(Action::Quit) => return Ok(Some(Exit::Quit)),
         Route::Shop(Action::Next) => (shop.focus + 1) % len,
@@ -210,24 +216,48 @@ fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<O
         Route::Shop(Action::Focus(i)) => if *i < len { *i } else { shop.focus },
         Route::Panel(keys) => {
             for key in keys {
-                match shop.panels[shop.focus].key(term, key)? {
-                    Outcome::Continue => {}
-                    Outcome::Open(dir) => {
-                        open(term, shop, &dir)?;
-                        return Ok(None);
-                    }
-                    Outcome::Help => {
-                        shop.help = Some(0);
-                        return Ok(None);
-                    }
-                    Outcome::Quit => return Ok(Some(Exit::Quit)),
-                    Outcome::QuitNoCwd => return Ok(Some(Exit::QuitNoCwd)),
+                let outcome = shop.panels[shop.focus].key(term, key)?;
+                if !matches!(outcome, Outcome::Continue) {
+                    return answer(term, shop, outcome);
                 }
             }
             return Ok(None);
         }
     };
     focus(term, shop, next)?;
+    Ok(None)
+}
+
+/// Does what a panel's key asked of shop.
+fn answer(term: &mut DefaultTerminal, shop: &mut Shop, outcome: Outcome) -> io::Result<Option<Exit>> {
+    let len = shop.panels.len();
+    match outcome {
+        Outcome::Continue => {}
+        Outcome::Open(dir) => open(term, shop, &dir)?,
+        Outcome::Help => shop.help = Some(0),
+        Outcome::NewTab(dir) => {
+            // Errors here would be lazi's config, which already loaded for the first tab, or a
+            // directory that vanished; either way there's simply no new tab.
+            if let Ok(lazi) = Lazi::new(None, Some(dir)) {
+                shop.panels.insert(shop.focus + 1, Panel::Lazi(Box::new(lazi)));
+                focus(term, shop, shop.focus + 1)?;
+            }
+        }
+        Outcome::NextTab => focus(term, shop, (shop.focus + 1) % len)?,
+        Outcome::PrevTab => focus(term, shop, (shop.focus + len - 1) % len)?,
+        Outcome::Quit => {
+            // q closes a lazi tab; only the last one takes shop with it.
+            if shop.panels.iter().filter(|p| matches!(p, Panel::Lazi(_))).count() < 2 {
+                return Ok(Some(Exit::Quit));
+            }
+            shop.panels[shop.focus].hide(term.backend_mut())?;
+            shop.panels.remove(shop.focus);
+            // The tab to the left takes over, as in yazi.
+            shop.focus = shop.focus.saturating_sub(1);
+            shop.panels[shop.focus].show();
+        }
+        Outcome::QuitNoCwd => return Ok(Some(Exit::QuitNoCwd)),
+    }
     Ok(None)
 }
 
@@ -323,7 +353,8 @@ fn tabs(buf: &mut Buffer, area: Rect, shop: &Shop) {
     let mut x = area.x;
     for (i, panel) in shop.panels.iter().enumerate() {
         let tab = if i == shop.focus { style.tab_focused } else { style.tab };
-        (x, _) = buf.set_stringn(x, area.y, format!(" {} ", panel.name()), area.right().saturating_sub(x) as usize, tab);
+        // Numbered, since the number keys pick tabs.
+        (x, _) = buf.set_stringn(x, area.y, format!(" {} {} ", i + 1, panel.name()), area.right().saturating_sub(x) as usize, tab);
     }
     if !shop.pending.is_empty() {
         let typed: Vec<String> = shop.pending.iter().map(|&key| key_name(key)).collect();

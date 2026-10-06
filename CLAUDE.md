@@ -62,7 +62,9 @@ status symbols, a worker thread for `git status`/`git fetch`, inotify on each `.
 `status.rs` holds the pure parser and discovery the tests cover). Its config is `host.ron`
 (`crates/shop/host.ron` is the reference). Keys go to shop's sequence map first and fall
 through to the focused panel when nothing there starts with them, so shop's bindings live
-on chords the panels don't use (`Alt+1`, `Alt+2`, `Alt+q`). New panels are a `Panel` variant in
+on keys the panels don't use (the number keys, `Ctrl+c`), and stand aside entirely while a
+panel takes text (`Panel::wants_text`: a lazi prompt or opener menu). lazi's `t`/`H`/`L`/`q` ask shop
+for tab changes through `Outcome`; every lazi tab shares one yank register (a static in `app.rs`). New panels are a `Panel` variant in
 `panel.rs` plus a `PanelSpec` variant in `config.rs`.
 
 ```sh

@@ -28,11 +28,14 @@ cp crates/lazi/config.ron ~/.config/lazi/
 shop [DIR] [--cwd-file PATH] [--config PATH]
 ```
 
-`Alt+1` shows the file browser, `Alt+2` the git tab, `Alt+q` quits (so does lazi's `q`).
+The number keys pick a tab (the tab bar numbers them), and `Ctrl+c` quits. In the file browser `t`
+opens another tab in the same folder, `H`/`L` move between tabs, and `q` closes a tab (quitting
+shop on the last). Every lazi tab shares one copy/cut register, so `y` in one and `p` in another
+works.
 `DIR` is where the file browser starts. `--config` is shop's `host.ron`; lazi's own settings
 are always `config.ron` (below).
 
-`--cwd-file` writes the directory the file browser was in when you quit with `q` or `Alt+q`
+`--cwd-file` writes the directory the file browser was in when you quit with `q` or `Ctrl+c`
 (not `Q`). A shell wrapper to follow it:
 
 ```sh
@@ -158,7 +161,9 @@ These are the bindings in the example `config.ron`.
 | `gg` `G` | Top / bottom |
 | `^d` `^u` / `S-PgDn` `S-PgUp` | Half page |
 | `^f` `^b` / `PgDn` `PgUp` | Full page |
-| `H` `L` | Back / forward in history |
+| `Shift+Tab` `Tab` | Back / forward in history |
+| `t` | New tab here |
+| `H` `L` | Previous / next tab |
 | `gh` `gc` `gd` | Go to `~`, `~/.config`, `~/Downloads` |
 | `.` | Toggle hidden files |
 | `s` / `S` | Cycle sort (name, size, mtime, extension) / reverse it |
@@ -181,6 +186,6 @@ These are the bindings in the example `config.ron`.
 | `cc` `cd` `cf` `cn` | Copy path / directory / file name / name without extension |
 | `J` `K` | Scroll the preview, or turn a PDF's pages |
 | `^z` | Suspend |
-| `q` / `Q` | Quit / quit without writing the cwd file |
+| `q` / `Q` | Close the tab (quit on the last) / quit without writing the cwd file |
 
 Actions act on the selection if there is one, else on the hovered entry.

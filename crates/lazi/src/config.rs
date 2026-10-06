@@ -275,6 +275,11 @@ pub enum Action {
     },
     /// Show every key binding; shop draws the menu.
     Help,
+    /// Open another lazi tab in shop, in this directory.
+    NewTab,
+    /// The neighbouring tab in shop, wrapping.
+    NextTab,
+    PrevTab,
 }
 
 /// Which part of the targets' paths to copy.
@@ -344,6 +349,10 @@ pub fn get() -> &'static Config {
 /// Reads `path`, or else the first of $XDG_CONFIG_HOME/lazi/config.ron and
 /// $XDG_CONFIG_DIRS/lazi/config.ron that exists.
 pub fn load(path: Option<PathBuf>) -> Result<(), String> {
+    // The config is per process: a second lazi tab uses the first one's.
+    if CONFIG.get().is_some() {
+        return Ok(());
+    }
     let path = match path {
         Some(path) => path,
         None => find("lazi/config.ron", "lazi's source has an example config.ron.")?,
