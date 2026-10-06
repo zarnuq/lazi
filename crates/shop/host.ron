@@ -13,7 +13,7 @@
     panels: [
         Lazi(config: None, dir: None),
         // A start page, like Doom Emacs's: these shortcuts, then the files opened last (from lazi,
-        // the search box or here). Search opens the search box with that query typed; Goto shows
+        // the search box or here) and the folders visited last, `recent` of each. Search opens the search box with that query typed; Goto shows
         // the folder in lazi; Edit opens the file with search.open.
         Dashboard(
             recent: 10,

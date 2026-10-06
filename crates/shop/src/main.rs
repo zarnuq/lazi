@@ -442,7 +442,8 @@ fn draw(term: &mut DefaultTerminal, shop: &mut Shop) -> io::Result<()> {
         let body = Rect { y: area.y + 1, height: area.height - 1, ..area };
         if let Panel::Dashboard(dash) = &mut shop.panels[shop.focus] {
             // Files since deleted or moved are left out rather than offered.
-            dash.recent = shop.files.iter().filter(|f| f.is_file()).take(dash.limit()).cloned().collect();
+            dash.files = shop.files.iter().filter(|f| f.is_file()).take(dash.limit()).cloned().collect();
+            dash.folders = shop.folders.iter().filter(|d| d.is_dir()).take(dash.limit()).cloned().collect();
         }
         shop.panels[shop.focus].draw(frame, body);
         if shop.help.is_some() {

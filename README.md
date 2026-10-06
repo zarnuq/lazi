@@ -68,9 +68,9 @@ folder; `Ctrl+r` shows the file in the file browser instead. Needs `fd` and `rg`
 
 A start page like Doom Emacs's dashboard: a menu of shortcuts from `host.ron`, each on its own
 key (open a project, search, go to a folder, edit a config file), and below it the files opened
-last from the file browser, the search box or the menu, kept across runs in
-`~/.local/state/shop/files`. `Enter` opens a file in `$EDITOR`; `Ctrl+r` shows it in the file
-browser.
+last from the file browser, the search box or the menu (kept across runs in
+`~/.local/state/shop/files`), then the folders visited last. `Enter` opens a file in `$EDITOR`
+or a folder in the file browser; `Ctrl+r` shows either in the file browser, the cursor on it.
 
 ## The git tab
 

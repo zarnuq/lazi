@@ -1,6 +1,6 @@
 //! The start page, like Doom Emacs's dashboard: a menu of shortcuts (search for a project, go
-//! to a folder, edit a file), then the files opened most recently. Nothing runs in the
-//! background; shop hands it the recent files before each frame.
+//! to a folder, edit a file), then the files opened and the folders visited most recently.
+//! Nothing runs in the background; shop hands it both lists before each frame.
 
 use std::path::PathBuf;
 
@@ -20,12 +20,20 @@ enum Bind {
     Action(DashAction),
 }
 
+/// A row the cursor can be on.
+enum Entry<'a> {
+    Item(usize),
+    File(&'a PathBuf),
+    Folder(&'a PathBuf),
+}
+
 pub struct Dashboard {
     spec: DashSpec,
     keys: Vec<(Vec<Key>, Bind)>,
     /// Newest first, already capped at `recent`; set by shop before each frame.
-    pub recent: Vec<PathBuf>,
-    /// Over the menu items, then the recent files.
+    pub files: Vec<PathBuf>,
+    pub folders: Vec<PathBuf>,
+    /// Over the menu items, then the files, then the folders.
     cursor: usize,
     pending: Vec<Key>,
 }
@@ -43,10 +51,10 @@ impl Dashboard {
                 return Err(format!("dashboard: \"{}\" is bound twice, or hides a longer binding", lazi::key_label(a)));
             }
         }
-        Ok(Self { spec, keys, recent: Vec::new(), cursor: 0, pending: Vec::new() })
+        Ok(Self { spec, keys, files: Vec::new(), folders: Vec::new(), cursor: 0, pending: Vec::new() })
     }
 
-    /// How many recent files to list.
+    /// How many recent files, and folders, to list.
     pub fn limit(&self) -> usize {
         self.spec.recent
     }
@@ -62,24 +70,49 @@ impl Dashboard {
             Lookup::Action(bind) => bind.clone(),
         };
         self.pending.clear();
-        let items = self.spec.menu.len();
-        let last = (items + self.recent.len()).saturating_sub(1);
-        match bind {
+        let last = (self.spec.menu.len() + self.files.len() + self.folders.len()).saturating_sub(1);
+        let open = match bind {
             Bind::Item(i) => return self.run(i),
-            Bind::Action(DashAction::Down) => self.cursor = (self.cursor + 1).min(last),
-            Bind::Action(DashAction::Up) => self.cursor = self.cursor.saturating_sub(1),
-            Bind::Action(DashAction::Top) => self.cursor = 0,
-            Bind::Action(DashAction::Bottom) => self.cursor = last,
-            Bind::Action(DashAction::Help) => return Outcome::Help,
-            Bind::Action(DashAction::Open) if self.cursor < items => return self.run(self.cursor),
-            Bind::Action(action @ (DashAction::Open | DashAction::Reveal)) => {
-                if let Some(file) = self.cursor.checked_sub(items).and_then(|i| self.recent.get(i)) {
-                    let file = file.clone();
-                    return if matches!(action, DashAction::Open) { Outcome::Edit(file) } else { Outcome::Reveal(file) };
-                }
+            Bind::Action(DashAction::Down) => {
+                self.cursor = (self.cursor + 1).min(last);
+                return Outcome::Continue;
             }
+            Bind::Action(DashAction::Up) => {
+                self.cursor = self.cursor.saturating_sub(1);
+                return Outcome::Continue;
+            }
+            Bind::Action(DashAction::Top) => {
+                self.cursor = 0;
+                return Outcome::Continue;
+            }
+            Bind::Action(DashAction::Bottom) => {
+                self.cursor = last;
+                return Outcome::Continue;
+            }
+            Bind::Action(DashAction::Help) => return Outcome::Help,
+            Bind::Action(DashAction::Open) => true,
+            Bind::Action(DashAction::Reveal) => false,
+        };
+        match self.entry(self.cursor) {
+            Some(Entry::Item(i)) if open => self.run(i),
+            Some(Entry::File(file)) if open => Outcome::Edit(file.clone()),
+            Some(Entry::Folder(dir)) if open => Outcome::Open(dir.clone()),
+            Some(Entry::File(path) | Entry::Folder(path)) => Outcome::Reveal(path.clone()),
+            _ => Outcome::Continue,
         }
-        Outcome::Continue
+    }
+
+    /// What row `i` of the menu, then the files, then the folders is.
+    fn entry(&self, i: usize) -> Option<Entry<'_>> {
+        let items = self.spec.menu.len();
+        if i < items {
+            return Some(Entry::Item(i));
+        }
+        let i = i - items;
+        match self.files.get(i) {
+            Some(file) => Some(Entry::File(file)),
+            None => self.folders.get(i - self.files.len()).map(Entry::Folder),
+        }
     }
 
     fn run(&self, item: usize) -> Outcome {
@@ -96,33 +129,40 @@ impl Dashboard {
         menu.chain(self.spec.keys.iter().map(|(keys, action)| (lazi::key_label(keys), format!("{action:?}")))).collect()
     }
 
-    /// One centred column: the menu with its keys right-aligned, a gap, then the recent files.
+    /// One centred column: the menu with its keys right-aligned, then the recent files and
+    /// the recent folders, each under a heading.
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
         let style = &self.spec.style;
-        let mut rows: Vec<Option<Line>> = Vec::new();
-        for item in &self.spec.menu {
-            rows.push(Some(Line::from(vec![Span::raw(item.label.clone()), Span::styled(item.key.clone(), style.key)])));
+        // Each row and, for one the cursor can be on, its place in the cursor's order.
+        let mut rows: Vec<(Line, Option<usize>)> = Vec::new();
+        for (i, item) in self.spec.menu.iter().enumerate() {
+            rows.push((Line::from(vec![Span::raw(item.label.clone()), Span::styled(item.key.clone(), style.key)]), Some(i)));
         }
-        rows.push(None);
-        rows.push(Some(Line::from(Span::styled("Recently opened files", style.title))));
-        let files = rows.len();
-        rows.extend(self.recent.iter().map(|f| Some(Line::from(tilde(f)))));
-        self.cursor = self.cursor.min((self.spec.menu.len() + self.recent.len()).saturating_sub(1));
+        let mut next = self.spec.menu.len();
+        for (title, paths) in [("Recently opened files", &self.files), ("Recent folders", &self.folders)] {
+            if paths.is_empty() {
+                continue;
+            }
+            rows.push((Line::default(), None));
+            rows.push((Line::from(Span::styled(title, style.title)), None));
+            for path in paths {
+                rows.push((Line::from(tilde(path)), Some(next)));
+                next += 1;
+            }
+        }
+        self.cursor = self.cursor.min(next.saturating_sub(1));
 
-        let width = rows.iter().flatten().map(|l| l.width() + 4).max().unwrap_or(0).clamp(40, 80).min(area.width as usize) as u16;
+        let width = rows.iter().map(|(l, _)| l.width() + 4).max().unwrap_or(0).clamp(40, 80).min(area.width as usize) as u16;
         let x = area.x + (area.width - width) / 2;
         // A third of the spare height above, as Doom sits a little high.
         let y = area.y + (area.height.saturating_sub(rows.len() as u16)) / 3;
-        let cursor_row = if self.cursor < self.spec.menu.len() { self.cursor } else { files + self.cursor - self.spec.menu.len() };
         let buf = frame.buffer_mut();
-        for (i, row) in rows.iter().enumerate() {
+        for (i, (line, index)) in rows.iter().enumerate() {
             let row_y = y + i as u16;
             if row_y >= area.bottom() {
                 break;
             }
-            let Some(line) = row else { continue };
-            let line_area = Rect { x, y: row_y, width, height: 1 };
-            if i < self.spec.menu.len() {
+            if index.is_some_and(|i| i < self.spec.menu.len()) {
                 // Label on the left, key on the right, as in Doom.
                 buf.set_line(x, row_y, &Line::from(line.spans[0].clone()), width);
                 let key = &line.spans[1];
@@ -130,8 +170,8 @@ impl Dashboard {
             } else {
                 buf.set_line(x, row_y, line, width);
             }
-            if i == cursor_row {
-                buf.set_style(line_area, style.cursor);
+            if *index == Some(self.cursor) {
+                buf.set_style(Rect { x, y: row_y, width, height: 1 }, style.cursor);
             }
         }
     }
