@@ -57,7 +57,7 @@ lazi lives in `crates/lazi/src/`:
 
 `crates/shop` is the program: args (`[DIR] --cwd-file --config --bench`, which the zsh `y`
 wrapper relies on), the event loop, and one panel at a time. Panels: lazi (via `lazi::Lazi` in
-`crates/lazi/src/lib.rs`) and git (`git.rs`: repos under configured roots with zhimmer's
+`crates/lazi/src/lib.rs`) and git (`git.rs`: repos found under configured roots, down to `depth` levels, with zhimmer's
 status symbols, a worker thread for `git status`/`git fetch`, inotify on each `.git`;
 `status.rs` holds the pure parser and discovery the tests cover). Its config is `host.ron`
 (`crates/shop/host.ron` is the reference). Keys go to shop's sequence map first and fall

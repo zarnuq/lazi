@@ -82,17 +82,34 @@ fn flag(s: &mut Status, x: char, y: char) {
     }
 }
 
-/// The git repositories directly under `root`: subdirectories with a `.git` entry (a directory,
-/// or a file for worktrees and submodules), hidden ones skipped, sorted case-insensitively
-/// like lazi's listings.
-pub fn discover(root: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut repos: Vec<PathBuf> = fs::read_dir(root)?
-        .filter_map(Result::ok)
-        .filter(|entry| !entry.file_name().as_bytes().starts_with(b"."))
-        .map(|entry| entry.path())
-        .filter(|path| path.join(".git").exists())
-        .collect();
-    repos.sort_by_cached_key(|path| path.file_name().map(|name| name.to_string_lossy().to_lowercase()));
+/// The git repositories under `root`, down to `depth` levels (1 is its direct subdirectories),
+/// sorted case-insensitively like lazi's listings. A repo is a directory with a `.git` entry (a
+/// directory, or a file for worktrees and submodules). The search doesn't go into a repo, so
+/// submodules and tools cloned inside one stay out, and skips hidden directories, where
+/// `~/.local` and plugin managers keep clones nobody works in. Err only when `root` itself
+/// can't be read.
+pub fn discover(root: &Path, depth: usize) -> io::Result<Vec<PathBuf>> {
+    let mut repos = Vec::new();
+    let mut todo = vec![(fs::read_dir(root)?, depth)];
+    while let Some((entries, depth)) = todo.pop() {
+        for entry in entries.filter_map(Result::ok) {
+            if entry.file_name().as_bytes().starts_with(b".") {
+                continue;
+            }
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if path.join(".git").exists() {
+                repos.push(path);
+            } else if depth > 1
+                && let Ok(entries) = fs::read_dir(&path)
+            {
+                todo.push((entries, depth - 1));
+            }
+        }
+    }
+    repos.sort_by_cached_key(|path| path.strip_prefix(root).unwrap_or(path).to_string_lossy().to_lowercase());
     Ok(repos)
 }
 
@@ -175,7 +192,7 @@ mod tests {
         // A worktree or submodule has a .git file instead of a directory.
         fs::create_dir_all(root.join("wt")).unwrap();
         fs::write(root.join("wt/.git"), "gitdir: elsewhere").unwrap();
-        let found = discover(&root);
+        let found = discover(&root, 1);
         let _ = fs::remove_dir_all(&root);
         let names: Vec<String> = found.unwrap().iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
         assert_eq!(names, ["Alpha", "beta", "wt"]);
@@ -195,8 +212,32 @@ mod tests {
         assert_eq!(dirs, [repo.join(".git"), heads.clone(), heads.join("feat"), heads.join("feat/deep"), heads.join("fix")]);
     }
 
+    /// Like a home directory: repos one and two levels down are found, a repo's own nested
+    /// repos (submodules, cloned tools) and anything deeper or hidden are not.
+    #[test]
+    fn discover_searches_down_to_the_depth() {
+        let root = std::env::temp_dir().join(format!("shop-depth-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for dir in [
+            "dotfiles/.git",
+            "Projects/lazi/.git",
+            "Pictures/bgs/.git",
+            "Projects/website/.git",
+            "Projects/website/themes/ananke/.git",
+            "notes/htb/EASY/cve/.git",
+            "notes/Tools/payloads/.git",
+            ".claude/plugins/x/.git",
+        ] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let found = discover(&root, 2);
+        let _ = fs::remove_dir_all(&root);
+        let found: Vec<String> = found.unwrap().iter().map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(found, ["dotfiles", "Pictures/bgs", "Projects/lazi", "Projects/website"]);
+    }
+
     #[test]
     fn discover_fails_on_a_missing_root() {
-        assert!(discover(Path::new("/nonexistent/shop-root")).is_err());
+        assert!(discover(Path::new("/nonexistent/shop-root"), 2).is_err());
     }
 }

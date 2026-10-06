@@ -30,8 +30,10 @@ pub enum PanelSpec {
 #[derive(Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct GitSpec {
-    /// A leading `~` is the home directory.
+    /// Where to search for repos. A leading `~` is the home directory.
     pub roots: Vec<String>,
+    /// How many levels below each root to search: 1 is its direct subdirectories.
+    pub depth: usize,
     /// Seconds between background fetch rounds.
     pub fetch_every: u64,
     pub symbols: GitSymbols,
@@ -125,6 +127,11 @@ pub fn load(path: Option<PathBuf>) -> Result<Config, String> {
             && git.fetch_every == 0
         {
             return Err(format!("{}: fetch_every must be at least 1", path.display()));
+        }
+        if let PanelSpec::Git(git) = panel
+            && git.depth == 0
+        {
+            return Err(format!("{}: depth must be at least 1", path.display()));
         }
     }
     Ok(config)

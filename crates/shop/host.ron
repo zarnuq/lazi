@@ -4,12 +4,15 @@
     // Panels in tab order; the first has focus at start.
     //   Lazi(config, dir): config None is lazi's usual lookup, dir None is shop's working
     //   directory. lazi's config is per process, so a second Lazi panel uses the first's.
-    //   Git(roots, fetch_every, symbols, style, keys): repos directly under each root, with
+    //   Git(roots, depth, fetch_every, symbols, style, keys): repos found under each root, with
     //   zhimmer's status symbols. Keys are the panel's own; Run's $1 is the repo's path.
     panels: [
         Lazi(config: None, dir: None),
         Git(
-            roots: ["~/Projects"],
+            roots: ["~"],
+            // Levels below each root to search; 2 finds ~/Projects/x but not repos kept deeper
+            // (notes, downloads of downloads). Hidden directories and repos inside repos are skipped.
+            depth: 2,
             // Seconds between background fetch rounds.
             fetch_every: 300,
             symbols: (

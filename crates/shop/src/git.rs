@@ -66,6 +66,7 @@ impl Notifier {
 struct Root {
     /// As written in the config, for the header.
     label: String,
+    path: PathBuf,
     /// None when the root couldn't be read.
     repos: Option<Vec<PathBuf>>,
 }
@@ -248,8 +249,7 @@ impl Git {
             return;
         }
         let list = Rect { height: area.height - 1, ..area };
-        let all = self.all();
-        let name_w = all.iter().map(|p| name(p).chars().count()).max().unwrap_or(0).min(30);
+        let name_w = self.roots.iter().flat_map(|r| r.repos.iter().flatten().map(|p| relative(&r.path, p).chars().count())).max().unwrap_or(0).min(40);
         let branch_w = self.repos.values().filter_map(|r| r.status.as_ref()?.as_ref().ok()).map(|s| s.branch.chars().count()).max().unwrap_or(0).min(24);
 
         let mut rows: Vec<Line> = Vec::new();
@@ -265,7 +265,7 @@ impl Git {
                 if index == self.cursor {
                     cursor_row = Some(rows.len());
                 }
-                rows.push(self.row(path, name_w, branch_w));
+                rows.push(self.row(path, &relative(&root.path, path), name_w, branch_w));
                 index += 1;
             }
         }
@@ -303,10 +303,10 @@ impl Git {
     }
 
     /// One repo's row: name, branch, symbols, and fetch state.
-    fn row(&self, path: &Path, name_w: usize, branch_w: usize) -> Line<'static> {
+    fn row(&self, path: &Path, label: &str, name_w: usize, branch_w: usize) -> Line<'static> {
         let style = &self.spec.style;
         // Cut to the column, like the branch below, so the columns stay in line.
-        let cut: String = name(path).chars().take(name_w).collect();
+        let cut: String = label.chars().take(name_w).collect();
         let mut spans = vec![Span::raw(format!("  {cut:<name_w$}  "))];
         let repo = self.repos.get(path);
         match repo.and_then(|r| r.status.as_ref()) {
@@ -365,7 +365,17 @@ impl Git {
 
     /// Finds the repos again, watches their `.git`, and asks for every status and a fetch.
     fn refresh(&mut self) {
-        self.roots = self.spec.roots.iter().map(|label| Root { label: label.clone(), repos: status::discover(&expand(label)).ok() }).collect();
+        self.roots = self
+            .spec
+            .roots
+            .iter()
+            .map(|label| {
+                let path = expand(label);
+                // Only here, at startup and on Refresh: the search reads directories, so it isn't
+                // something to repeat per fetch or per frame.
+                Root { label: label.clone(), repos: status::discover(&path, self.spec.depth).ok(), path }
+            })
+            .collect();
         let all = self.all();
         self.repos.retain(|path, _| all.contains(path));
         for path in &all {
@@ -531,6 +541,11 @@ fn run(program: &str, args: &[&str], dir: &Path, limit: Duration) -> Result<Stri
     }
     let stderr = String::from_utf8_lossy(&stderr);
     Err(stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).map_or_else(|| status.to_string(), str::to_owned))
+}
+
+/// A repo as the panel lists it: its path under the root, like `Projects/lazi`.
+fn relative(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root).unwrap_or(path).to_string_lossy().into_owned()
 }
 
 fn name(path: &Path) -> String {
