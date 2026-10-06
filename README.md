@@ -18,6 +18,11 @@ cargo install --path crates/lazi
 mkdir -p ~/.config/lazi && cp crates/lazi/config.ron ~/.config/lazi/
 ```
 
+## shop
+
+`crates/shop` is an experimental host that runs lazi as one panel of a terminal workspace,
+with `Ctrl+x` bindings of its own. See `crates/shop/host.ron`.
+
 ## Usage
 
 ```sh

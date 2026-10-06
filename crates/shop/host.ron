@@ -1,0 +1,27 @@
+// shop's reference config. shop reads the first of --config PATH, $XDG_CONFIG_HOME/shop/host.ron
+// and $XDG_CONFIG_DIRS/shop/host.ron. Every field is required; there are no built-in defaults.
+(
+    // Panels in tab order; the first has focus at start.
+    //   Lazi(config, dir): config None is lazi's usual lookup, dir None is shop's working
+    //   directory. lazi's config is per process, so a second Lazi panel uses the first's.
+    panels: [
+        Lazi(config: None, dir: None),
+    ],
+    // Styles are written as in lazi's config.ron.
+    style: (
+        tab: (fg: "gray"),
+        tab_focused: (fg: "black", bg: "blue"),
+    ),
+    // Keys are written as in lazi's config.ron. shop looks at every key first; whatever no
+    // binding here claims goes to the focused panel, so keep these behind a prefix the panels
+    // don't use.
+    //   Next, Prev: the neighbouring panel, wrapping.
+    //   Focus(n): the panel at position n in `panels`, from 0.
+    //   Quit: quit shop. A panel's own quit (lazi's q) also quits shop.
+    keys: {
+        "Ctrl+x b": Next,
+        "Ctrl+x B": Prev,
+        "Ctrl+x 1": Focus(0),
+        "Ctrl+x Ctrl+c": Quit,
+    },
+)

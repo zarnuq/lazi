@@ -18,17 +18,18 @@ cargo run --release -p lazi -- --config crates/lazi/config.ron --bench   # time 
 cargo clippy --workspace   # keep it warning-free
 ```
 
-There are no tests. Check behaviour by running it.
+lazi has no tests; shop has one for key routing. Check behaviour by running it.
 
 ## Layout
 
 lazi lives in `crates/lazi/src/`:
 
-- `main.rs` — args, the event loop, key dispatch (`handle` → `config::lookup` → `apply`),
-  prompt and `O`-menu key handling, frame drawing.
+- `main.rs` — args, the event loop, frame drawing.
+- `lib.rs` — `Lazi`, lazi as a panel a host drives: key dispatch (`Lazi::key` →
+  `config::lookup` → `apply`), prompt and `O`-menu key handling, drawing into a `Rect`.
 - `config.rs` — the config schema (serde structs, read with `ron`), loading into a static
   (`config::get()`), key-name parsing, and `lookup` for multi-key sequences. New features
-  usually add an `Action` variant here, a match arm in `main::apply`, and a binding in
+  usually add an `Action` variant here, a match arm in `apply` (`lib.rs`), and a binding in
   `config.ron`. New options are required fields: add them to `config.ron` too.
 - `app.rs` — `App` state: cwd, cursor, listing cache, selection, yank, prompts, filter,
   find, history, background tasks, preview requests. Most logic lives here.
@@ -49,6 +50,20 @@ lazi lives in `crates/lazi/src/`:
   pipe.
 - `ui.rs` — drawing: header, three columns, status line/prompts, opener menu.
 - `input.rs` — single-line readline-style input for prompts.
+
+## shop
+
+`crates/shop` is a TUI host that shows one panel at a time; lazi (via `lazi::Lazi` in
+`crates/lazi/src/lib.rs`) is the only panel so far. Its config is `host.ron`
+(`crates/shop/host.ron` is the reference). Keys go to shop's sequence map first and fall
+through to the focused panel when nothing there starts with them, so shop's bindings live
+behind a prefix (`Ctrl+x`) that panels don't use. New panels are a `Panel` variant in
+`panel.rs` plus a `PanelSpec` variant in `config.rs`.
+
+```sh
+cargo run -p shop -- --config crates/shop/host.ron
+cargo test -p shop          # the one test: prefix routing
+```
 
 ## Conventions & gotchas
 
