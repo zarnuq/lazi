@@ -64,6 +64,14 @@ the `exclude` globs in `host.ron`; `repo:`, `dir:`, `file:` or `content:`
 narrows it to one source. `Enter` opens a file in `$EDITOR` (at the matching line) or goes to a
 folder; `Ctrl+r` shows the file in the file browser instead. Needs `fd` and `rg`.
 
+## The home tab
+
+A start page like Doom Emacs's dashboard: a menu of shortcuts from `host.ron`, each on its own
+key (open a project, search, go to a folder, edit a config file), and below it the files opened
+last from the file browser, the search box or the menu, kept across runs in
+`~/.local/state/shop/files`. `Enter` opens a file in `$EDITOR`; `Ctrl+r` shows it in the file
+browser.
+
 ## The git tab
 
 Configured in `host.ron` (see [`crates/shop/host.ron`](crates/shop/host.ron)): the folders

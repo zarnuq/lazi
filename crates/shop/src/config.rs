@@ -84,6 +84,75 @@ pub enum PanelSpec {
     /// `config: None` is lazi's usual lookup; `dir: None` is shop's working directory.
     Lazi { config: Option<PathBuf>, dir: Option<PathBuf> },
     Git(Box<GitSpec>),
+    Dashboard(Box<DashSpec>),
+}
+
+impl PanelSpec {
+    /// The tab's name, which the saved session refers to it by.
+    pub fn name(&self) -> &'static str {
+        match self {
+            PanelSpec::Lazi { .. } => "lazi",
+            PanelSpec::Git(_) => "git",
+            PanelSpec::Dashboard(_) => "home",
+        }
+    }
+}
+
+/// The start page, like Doom Emacs's: a menu of shortcuts above the files opened last.
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DashSpec {
+    /// How many recently opened files to list.
+    pub recent: usize,
+    /// Shown in this order, each with its key.
+    pub menu: Vec<MenuItem>,
+    pub style: DashStyles,
+    /// The panel's own keys; the menu's come from `menu`.
+    #[serde(deserialize_with = "lazi::sequences")]
+    pub keys: Vec<(Vec<Key>, DashAction)>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct MenuItem {
+    /// Written as in `keys`.
+    pub key: String,
+    pub label: String,
+    pub run: Shortcut,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub enum Shortcut {
+    /// Open the search box with this query, like "repo:." for every repo.
+    Search(String),
+    /// Show this folder in lazi. A leading `~` is the home directory.
+    Goto(String),
+    /// Open this file in the editor (`search.open`).
+    Edit(String),
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DashStyles {
+    #[serde(deserialize_with = "lazi::style")]
+    pub title: Style,
+    #[serde(deserialize_with = "lazi::style")]
+    pub key: Style,
+    #[serde(deserialize_with = "lazi::style")]
+    pub cursor: Style,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub enum DashAction {
+    Down,
+    Up,
+    Top,
+    Bottom,
+    /// Run the menu item, or open the file in the editor.
+    Open,
+    /// Show the file in lazi instead.
+    Reveal,
+    Help,
 }
 
 /// The git panel: repos directly under `roots`, their status in zhimmer's symbols.

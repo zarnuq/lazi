@@ -27,7 +27,7 @@ use ratatui::{DefaultTerminal, Frame};
 use app::{App, Menu, Prompt};
 use config::{Action, MenuAction, Opener, PromptAction};
 
-pub use config::{Key, Lookup, find, key_label, lookup, normalize, sequences, style};
+pub use config::{Key, Lookup, find, key_label, lookup, normalize, sequence, sequences, style};
 pub use open::{Cmd, run};
 
 /// How long a frame or a key waits for directory reads before going on without them.
@@ -49,6 +49,12 @@ pub enum Outcome {
     NewTab(PathBuf),
     NextTab,
     PrevTab,
+    /// Open the search box with this query. Like `Open`, only shop's other panels ask this.
+    Search(String),
+    /// Open this file in the editor.
+    Edit(PathBuf),
+    /// Show this file in a lazi panel, the cursor on it.
+    Reveal(PathBuf),
 }
 
 pub struct Lazi {
@@ -68,6 +74,11 @@ impl Lazi {
         };
         let app = App::new(cwd).map_err(|e| e.to_string())?;
         Ok(Self { app, pending: Vec::new() })
+    }
+
+    /// The files opened since the last call, oldest first.
+    pub fn take_opened(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.app.opened)
     }
 
     pub fn cwd(&self) -> &Path {
@@ -313,6 +324,7 @@ fn prompt_key(app: &mut App, key: Key) {
 }
 
 fn run_opener(term: &mut DefaultTerminal, app: &mut App, opener: &Opener, files: &[PathBuf]) -> io::Result<()> {
+    app.opened.extend(files.iter().filter(|f| !f.is_dir()).cloned());
     let cmd = Cmd { desc: &opener.desc, script: &opener.run, args: files, block: opener.block };
     run_cmd(term, app, &cmd)
 }

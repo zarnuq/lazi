@@ -462,7 +462,7 @@ fn single(name: &str) -> Result<Key, String> {
 /// Parses a binding: keys separated by spaces, each a key name or character with optional
 /// `+`-joined modifiers ("Ctrl+u", "Shift+PageUp", "Ctrl+x Ctrl+s"). A run of plain characters
 /// that isn't a key name is one key per character, so "gg" is "g g".
-fn sequence(name: &str) -> Result<Vec<Key>, String> {
+pub fn sequence(name: &str) -> Result<Vec<Key>, String> {
     let mut keys = Vec::new();
     for word in name.split_whitespace() {
         // The last `+` separates the key, unless the key is `+` itself.

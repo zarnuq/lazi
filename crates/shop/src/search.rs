@@ -206,6 +206,14 @@ impl Search {
         Ok(search)
     }
 
+    /// Types `query` in, as if by hand.
+    pub fn set_query(&mut self, query: &str) {
+        if !query.is_empty() {
+            self.query = query.to_owned();
+            self.changed();
+        }
+    }
+
     pub fn wake_fd(&self) -> RawFd {
         self.waker.fd()
     }
@@ -490,7 +498,7 @@ fn listing(dir: &Path, height: usize) -> Vec<Line<'static>> {
 }
 
 /// A path with the home directory written as ~.
-fn tilde(path: &Path) -> String {
+pub fn tilde(path: &Path) -> String {
     match env::var_os("HOME").and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
         Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
         Some(rest) => format!("~/{}", rest.display()),

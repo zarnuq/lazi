@@ -12,6 +12,29 @@
     restore: true,
     panels: [
         Lazi(config: None, dir: None),
+        // A start page, like Doom Emacs's: these shortcuts, then the files opened last (from lazi,
+        // the search box or here). Search opens the search box with that query typed; Goto shows
+        // the folder in lazi; Edit opens the file with search.open.
+        Dashboard(
+            recent: 10,
+            menu: [
+                (key: "p", label: "Open project", run: Search("repo:.")),
+                (key: "s", label: "Search", run: Search("")),
+                (key: "h", label: "Home folder", run: Goto("~")),
+                (key: "c", label: "Open shop config", run: Edit("~/.config/shop/host.ron")),
+                (key: "L", label: "Open lazi config", run: Edit("~/.config/lazi/config.ron")),
+            ],
+            style: (
+                title: (fg: "#89b4fa", bold: true),
+                key: (fg: "#cba6f7"),
+                cursor: (bg: "#45475a"),
+            ),
+            keys: {
+                "j": Down, "k": Up, "Down": Down, "Up": Up, "g g": Top, "G": Bottom,
+                "Enter": Open, "l": Open, "Ctrl+r": Reveal,
+                "?": Help,
+            },
+        ),
         Git(
             roots: ["~"],
             // Levels below each root to search; 2 finds ~/Projects/x but not repos kept deeper

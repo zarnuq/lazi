@@ -3,7 +3,6 @@
 //! name per tab. Tab one, the first lazi tab, isn't really saved: it always opens where shop is
 //! started; the others stay where they were left until closed.
 
-use std::collections::VecDeque;
 use std::{env, fs, io, mem};
 use std::path::{Path, PathBuf};
 
@@ -77,28 +76,28 @@ pub fn parse(text: &str) -> Session {
 pub fn layout(saved: Option<Session>, specs: &[PanelSpec], here: PathBuf, exists: impl Fn(&Path) -> bool) -> (Vec<PanelSpec>, usize) {
     let Some(lazi_config) = specs.iter().find_map(|s| match s {
         PanelSpec::Lazi { config, .. } => Some(config.clone()),
-        PanelSpec::Git(_) => None,
+        _ => None,
     }) else {
         // No lazi panel configured, so no directory to restore anywhere.
         return (specs.to_vec(), 0);
     };
     let mut out = Vec::new();
     if let Some(saved) = saved {
-        let mut gits: VecDeque<PanelSpec> = specs.iter().filter(|s| matches!(s, PanelSpec::Git(_))).cloned().collect();
+        let mut others: Vec<PanelSpec> = specs.iter().filter(|s| !matches!(s, PanelSpec::Lazi { .. })).cloned().collect();
         let mut first = true;
         for tab in saved.tabs {
             let spec = match tab {
                 // Tab one's folder is about to be replaced by `here`, so it needn't still exist.
                 Tab::Lazi(dir) if mem::take(&mut first) || exists(&dir) => PanelSpec::Lazi { config: lazi_config.clone(), dir: Some(dir) },
-                Tab::Other(name) if name == "git" => match gits.pop_front() {
-                    Some(git) => git,
+                Tab::Other(name) => match others.iter().position(|s| s.name() == name) {
+                    Some(i) => others.remove(i),
                     None => continue,
                 },
                 _ => continue,
             };
             out.push(spec);
         }
-        out.extend(gits);
+        out.extend(others);
     }
     if !out.iter().any(|s| matches!(s, PanelSpec::Lazi { .. })) {
         // Nothing usable was saved: the config's layout.
@@ -111,25 +110,25 @@ pub fn layout(saved: Option<Session>, specs: &[PanelSpec], here: PathBuf, exists
     (out, one)
 }
 
-/// How many visited folders the search keeps.
-const FOLDERS: usize = 500;
+/// How many visited folders, or opened files, are kept.
+const HISTORY: usize = 500;
 
-/// Puts `dir` first among the visited folders, moving it up if it was already there.
-pub fn remember(folders: &mut Vec<PathBuf>, dir: &Path) {
-    folders.retain(|f| f != dir);
-    folders.insert(0, dir.to_path_buf());
-    folders.truncate(FOLDERS);
+/// Puts `path` first in a history list, moving it up if it was already there.
+pub fn remember(list: &mut Vec<PathBuf>, path: &Path) {
+    list.retain(|f| f != path);
+    list.insert(0, path.to_path_buf());
+    list.truncate(HISTORY);
 }
 
-/// The visited folders, newest first, from the last runs.
-pub fn load_folders() -> Vec<PathBuf> {
-    let Some(path) = state("folders") else { return Vec::new() };
+/// A history list (`folders` visited, `files` opened), newest first, from the last runs.
+pub fn load_history(name: &str) -> Vec<PathBuf> {
+    let Some(path) = state(name) else { return Vec::new() };
     fs::read_to_string(path).map(|text| text.lines().map(PathBuf::from).collect()).unwrap_or_default()
 }
 
-pub fn save_folders(folders: &[PathBuf]) -> io::Result<()> {
-    let text: String = folders.iter().map(|f| format!("{}\n", f.display())).collect();
-    write_state("folders", &text)
+pub fn save_history(name: &str, list: &[PathBuf]) -> io::Result<()> {
+    let text: String = list.iter().map(|f| format!("{}\n", f.display())).collect();
+    write_state(name, &text)
 }
 
 #[cfg(test)]
@@ -172,6 +171,7 @@ mod tests {
             .map(|s| match s {
                 PanelSpec::Lazi { dir, .. } => format!("lazi {}", dir.as_ref().map_or("-".into(), |d| d.display().to_string())),
                 PanelSpec::Git(g) => format!("git {}", g.fetch_every),
+                PanelSpec::Dashboard(_) => "home".into(),
             })
             .collect()
     }
@@ -205,6 +205,19 @@ mod tests {
         let (specs, focus) = layout(None, &[git(300), lazi("/cfg")], "/here".into(), |_| true);
         assert_eq!(shape(&specs), ["git 300", "lazi /here"]);
         assert_eq!(focus, 1);
+    }
+
+    #[test]
+    fn other_panels_come_back_in_their_saved_order() {
+        let dash = PanelSpec::Dashboard(Box::new(crate::config::DashSpec {
+            recent: 5,
+            menu: Vec::new(),
+            style: crate::config::DashStyles { title: Default::default(), key: Default::default(), cursor: Default::default() },
+            keys: Vec::new(),
+        }));
+        let saved = Session { tabs: vec![Tab::Lazi("/a".into()), Tab::Other("git".into()), Tab::Other("home".into())] };
+        let (specs, _) = layout(Some(saved), &[lazi("/cfg"), dash, git(300)], "/here".into(), |_| true);
+        assert_eq!(shape(&specs), ["lazi /here", "git 300", "home"]);
     }
 
     #[test]

@@ -595,7 +595,7 @@ fn name(path: &Path) -> String {
 }
 
 /// A leading `~` is the home directory, as in a shell.
-fn expand(root: &str) -> PathBuf {
+pub fn expand(root: &str) -> PathBuf {
     if let Some(rest) = root.strip_prefix('~')
         && let Some(home) = env::var_os("HOME")
     {

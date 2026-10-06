@@ -3,6 +3,7 @@
 //! is taking text; the rest go to the focused panel.
 
 mod config;
+mod dashboard;
 mod git;
 mod panel;
 mod search;
@@ -46,6 +47,8 @@ struct Shop {
     search: Option<Search>,
     /// Folders the lazi tabs have been in, newest first, for the search box.
     folders: Vec<PathBuf>,
+    /// Files opened from lazi, the search box or the dashboard, newest first, for the dashboard.
+    files: Vec<PathBuf>,
 }
 
 enum Exit {
@@ -95,7 +98,7 @@ fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBu
     // Where the focused file-browser tab opens: DIR, else the config's, else where shop was run.
     let configured = config.panels.iter().find_map(|p| match p {
         PanelSpec::Lazi { dir, .. } => dir.clone(),
-        PanelSpec::Git(_) => None,
+        _ => None,
     });
     let here = match dir.or(configured) {
         Some(dir) => dir,
@@ -104,7 +107,10 @@ fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBu
     let saved = if config.restore { session::load() } else { None };
     let (specs, focus) = session::layout(saved, &config.panels, here, Path::is_dir);
     let panels = specs.iter().map(Panel::new).collect::<Result<Vec<_>, _>>()?;
-    let mut shop = Shop { config, panels, focus, pending: Vec::new(), help: None, help_page: 0, search: None, folders: session::load_folders() };
+    let mut shop = Shop { config, panels, focus, pending: Vec::new(), help: None, help_page: 0, search: None,
+        folders: session::load_history("folders"),
+        files: session::load_history("files"),
+    };
     let mut term = ratatui::init();
     let res = run(&mut term, &mut shop, bench);
     for panel in &mut shop.panels {
@@ -112,10 +118,12 @@ fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBu
     }
     ratatui::restore();
 
-    if !matches!(res, Ok(Exit::Bench(_)))
-        && let Err(e) = session::save_folders(&shop.folders)
-    {
-        eprintln!("shop: saving visited folders: {e}");
+    if !matches!(res, Ok(Exit::Bench(_))) {
+        for (name, list) in [("folders", &shop.folders), ("files", &shop.files)] {
+            if let Err(e) = session::save_history(name, list) {
+                eprintln!("shop: saving {name}: {e}");
+            }
+        }
     }
     if shop.config.restore
         && !matches!(res, Ok(Exit::Bench(_)))
@@ -183,8 +191,11 @@ fn run(term: &mut DefaultTerminal, shop: &mut Shop, bench: Option<Instant>) -> i
                 return Ok(exit);
             }
             // Keys are what move lazi tabs, so after one is when a new folder can show up.
-            if let Some(lazi) = shop.panels[shop.focus].lazi() {
+            if let Panel::Lazi(lazi) = &mut shop.panels[shop.focus] {
                 session::remember(&mut shop.folders, lazi.cwd());
+                for file in lazi.take_opened() {
+                    session::remember(&mut shop.files, &file);
+                }
             }
         }
         if let Some(search) = &mut shop.search {
@@ -231,14 +242,11 @@ fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<O
             }
             Done::Open(hit) => {
                 let root = search.root.clone();
-                let spec = &shop.config.search;
-                let (script, args) = match hit {
-                    Hit::Line(path, n, _) => (&spec.open_line, vec![root.join(path), PathBuf::from(n.to_string())]),
-                    Hit::File(path) | Hit::Text(path) | Hit::Repo(path) | Hit::Dir(path) => (&spec.open, vec![root.join(path)]),
+                let (path, line) = match hit {
+                    Hit::Line(path, n, _) => (path, Some(n)),
+                    Hit::File(path) | Hit::Text(path) | Hit::Repo(path) | Hit::Dir(path) => (path, None),
                 };
-                let cmd = Cmd { desc: script, script, args: &args, block: true };
-                // Blocking, so a failure is only the editor's own exit status: nothing to keep.
-                let _ = lazi::run(term, &cmd, &root, Box::new(|_| {}))?;
+                edit(term, shop, &root, &root.join(path), line)?;
                 shop.search = None;
             }
             Done::Reveal(Hit::File(path) | Hit::Text(path) | Hit::Line(path, ..)) => {
@@ -275,11 +283,7 @@ fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<O
         Route::Wait => return Ok(None),
         Route::Shop(Action::Quit) => return Ok(Some(Exit::Quit)),
         Route::Shop(Action::Search) => {
-            let (root, repos) = search_root(shop);
-            match Search::open(shop.config.search.clone(), root, repos, shop.folders.clone()) {
-                Ok(search) => shop.search = Some(search),
-                Err(e) => eprintln!("shop: search: {e}"),
-            }
+            open_search(shop, "");
             return Ok(None);
         }
         Route::Shop(Action::Next) => (shop.focus + 1) % len,
@@ -344,6 +348,9 @@ fn answer(term: &mut DefaultTerminal, shop: &mut Shop, outcome: Outcome) -> io::
             shop.panels[shop.focus].show();
         }
         Outcome::QuitNoCwd => return Ok(Some(Exit::QuitNoCwd)),
+        Outcome::Search(query) => open_search(shop, &query),
+        Outcome::Edit(file) => edit(term, shop, file.parent().unwrap_or(Path::new("/")), &file, None)?,
+        Outcome::Reveal(file) => reveal(term, shop, &file)?,
     }
     Ok(None)
 }
@@ -381,6 +388,34 @@ fn reveal(term: &mut DefaultTerminal, shop: &mut Shop, path: &Path) -> io::Resul
     focus(term, shop, i)
 }
 
+/// Opens the search box, with `query` already typed.
+fn open_search(shop: &mut Shop, query: &str) {
+    let (root, repos) = search_root(shop);
+    match Search::open(shop.config.search.clone(), root, repos, shop.folders.clone()) {
+        Ok(mut search) => {
+            search.set_query(query);
+            shop.search = Some(search);
+        }
+        // An eventfd shop couldn't make; there's nowhere better to say so.
+        Err(e) => eprintln!("shop: search: {e}"),
+    }
+}
+
+/// Opens `file` in the editor (at `line`, if given) from `dir`, and remembers it for the
+/// dashboard.
+fn edit(term: &mut DefaultTerminal, shop: &mut Shop, dir: &Path, file: &Path, line: Option<u64>) -> io::Result<()> {
+    let spec = &shop.config.search;
+    let (script, args) = match line {
+        Some(n) => (&spec.open_line, vec![file.to_path_buf(), PathBuf::from(n.to_string())]),
+        None => (&spec.open, vec![file.to_path_buf()]),
+    };
+    let cmd = Cmd { desc: script, script, args: &args, block: true };
+    // Blocking, so a failure is only the editor's own exit status: nothing to keep.
+    let _ = lazi::run(term, &cmd, dir, Box::new(|_| {}))?;
+    session::remember(&mut shop.files, file);
+    Ok(())
+}
+
 /// Where the search box looks, and the repos it offers: under the focused lazi tab, or from the
 /// git tab under its selected repo.
 fn search_root(shop: &Shop) -> (PathBuf, Vec<PathBuf>) {
@@ -388,6 +423,7 @@ fn search_root(shop: &Shop) -> (PathBuf, Vec<PathBuf>) {
     let root = match &shop.panels[shop.focus] {
         Panel::Git(git) => git.selected(),
         Panel::Lazi(lazi) => Some(lazi.cwd().to_path_buf()),
+        Panel::Dashboard(_) => None,
     };
     let root = root.or_else(|| shop.panels.iter().find_map(|p| p.lazi()).map(|l| l.cwd().to_path_buf())).unwrap_or_else(|| PathBuf::from("."));
     (root, repos)
@@ -404,6 +440,10 @@ fn draw(term: &mut DefaultTerminal, shop: &mut Shop) -> io::Result<()> {
         }
         tabs(frame.buffer_mut(), Rect { height: 1, ..area }, shop);
         let body = Rect { y: area.y + 1, height: area.height - 1, ..area };
+        if let Panel::Dashboard(dash) = &mut shop.panels[shop.focus] {
+            // Files since deleted or moved are left out rather than offered.
+            dash.recent = shop.files.iter().filter(|f| f.is_file()).take(dash.limit()).cloned().collect();
+        }
         shop.panels[shop.focus].draw(frame, body);
         if shop.help.is_some() {
             help(frame.buffer_mut(), body, shop);

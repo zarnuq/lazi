@@ -115,6 +115,8 @@ pub struct App {
     /// Shown in the status line until the next key.
     pub error: Option<String>,
     pub info: Option<String>,
+    /// Files handed to an opener since the host last asked, for its recent-files list.
+    pub opened: Vec<PathBuf>,
     pub filter: Option<Filter>,
     /// The find query, kept after the prompt closes for `n`/`N`.
     pub find: Option<String>,
@@ -156,6 +158,7 @@ impl App {
             offset: 0,
             height: 0,
             error: None,
+            opened: Vec::new(),
             info: None,
             filter: None,
             find: None,

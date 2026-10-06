@@ -11,12 +11,14 @@ use ratatui::layout::Rect;
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::config::PanelSpec;
+use crate::dashboard::Dashboard;
 use crate::git::Git;
 
-/// Boxed: the two differ in size by hundreds of bytes.
+/// Boxed: they differ in size by hundreds of bytes.
 pub enum Panel {
     Lazi(Box<Lazi>),
     Git(Box<Git>),
+    Dashboard(Box<Dashboard>),
 }
 
 impl Panel {
@@ -24,29 +26,29 @@ impl Panel {
         match spec {
             PanelSpec::Lazi { config, dir } => Ok(Panel::Lazi(Box::new(Lazi::new(config.clone(), dir.clone())?))),
             PanelSpec::Git(spec) => Ok(Panel::Git(Box::new(Git::new((**spec).clone())?))),
+            PanelSpec::Dashboard(spec) => Ok(Panel::Dashboard(Box::new(Dashboard::new((**spec).clone())?))),
         }
     }
 
     /// Called when the panel gains focus.
     pub fn show(&mut self) {
-        match self {
-            Panel::Lazi(_) => {}
-            Panel::Git(p) => p.show(),
+        if let Panel::Git(p) = self {
+            p.show();
         }
     }
 
     pub fn lazi(&self) -> Option<&Lazi> {
         match self {
             Panel::Lazi(p) => Some(p),
-            Panel::Git(_) => None,
+            _ => None,
         }
     }
 
     /// The repos a git panel found, for the search box.
     pub fn repos(&self) -> Vec<PathBuf> {
         match self {
-            Panel::Lazi(_) => Vec::new(),
             Panel::Git(p) => p.repos(),
+            _ => Vec::new(),
         }
     }
 
@@ -54,7 +56,7 @@ impl Panel {
     pub fn wants_text(&self) -> bool {
         match self {
             Panel::Lazi(p) => p.wants_text(),
-            Panel::Git(_) => false,
+            _ => false,
         }
     }
 
@@ -63,6 +65,7 @@ impl Panel {
         match self {
             Panel::Lazi(p) => p.help(),
             Panel::Git(p) => p.help(),
+            Panel::Dashboard(p) => p.help(),
         }
     }
 
@@ -71,6 +74,7 @@ impl Panel {
         match self {
             Panel::Lazi(_) => "lazi",
             Panel::Git(_) => "git",
+            Panel::Dashboard(_) => "home",
         }
     }
 
@@ -78,7 +82,7 @@ impl Panel {
     pub fn title(&self) -> String {
         match self {
             Panel::Lazi(p) => p.title(),
-            Panel::Git(_) => "git".into(),
+            _ => self.name().into(),
         }
     }
 
@@ -86,6 +90,7 @@ impl Panel {
         match self {
             Panel::Lazi(p) => p.wake_fds(),
             Panel::Git(p) => p.wake_fds(),
+            Panel::Dashboard(_) => Vec::new(),
         }
     }
 
@@ -93,6 +98,7 @@ impl Panel {
         match self {
             Panel::Lazi(p) => p.on_wake(),
             Panel::Git(p) => p.on_wake(),
+            Panel::Dashboard(_) => false,
         }
     }
 
@@ -100,6 +106,7 @@ impl Panel {
         match self {
             Panel::Lazi(p) => p.receive(grace),
             Panel::Git(p) => p.receive(),
+            Panel::Dashboard(_) => false,
         }
     }
 
@@ -107,6 +114,7 @@ impl Panel {
         match self {
             Panel::Lazi(p) => p.key(term, key),
             Panel::Git(p) => p.key(term, key),
+            Panel::Dashboard(p) => Ok(p.key(key)),
         }
     }
 
@@ -114,13 +122,14 @@ impl Panel {
         match self {
             Panel::Lazi(p) => p.draw(frame, area),
             Panel::Git(p) => p.draw(frame, area),
+            Panel::Dashboard(p) => p.draw(frame, area),
         }
     }
 
     pub fn sync_image(&mut self, out: &mut impl Write) -> io::Result<()> {
         match self {
             Panel::Lazi(p) => p.sync_image(out),
-            Panel::Git(_) => Ok(()),
+            _ => Ok(()),
         }
     }
 
@@ -128,14 +137,14 @@ impl Panel {
     pub fn hide(&mut self, out: &mut impl Write) -> io::Result<()> {
         match self {
             Panel::Lazi(p) => p.hide(out),
-            Panel::Git(_) => Ok(()),
+            _ => Ok(()),
         }
     }
 
     pub fn clear_images(&mut self, out: &mut impl Write) -> io::Result<()> {
         match self {
             Panel::Lazi(p) => p.clear_images(out),
-            Panel::Git(_) => Ok(()),
+            _ => Ok(()),
         }
     }
 }
