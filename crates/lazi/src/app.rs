@@ -353,6 +353,10 @@ impl App {
             (Some(rest), Some(home)) => PathBuf::from(home).join(rest.trim_start_matches('/')),
             _ => self.cwd.join(dir),
         };
+        self.goto_path(dir);
+    }
+
+    pub fn goto_path(&mut self, dir: PathBuf) {
         if dir.is_dir() {
             self.cd(dir);
         } else {

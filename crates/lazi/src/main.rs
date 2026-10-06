@@ -104,6 +104,8 @@ fn run(term: &mut DefaultTerminal, lazi: &mut Lazi, bench: Option<Instant>) -> i
                 Outcome::Continue => {}
                 Outcome::Quit => return Ok(Exit::Quit),
                 Outcome::QuitNoCwd => return Ok(Exit::QuitNoCwd),
+                // Only other panels in a host return this.
+                Outcome::Open(_) => {}
             }
         }
         dirty |= lazi.receive(Some(Duration::ZERO));

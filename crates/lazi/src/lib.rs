@@ -12,7 +12,7 @@ mod ops;
 mod preview;
 mod ui;
 pub mod wake;
-mod watch;
+pub mod watch;
 
 use std::env;
 use std::io::{self, Write};
@@ -26,9 +26,9 @@ use ratatui::{DefaultTerminal, Frame};
 
 use app::{App, Menu, Prompt};
 use config::{Action, MenuAction, Opener, PromptAction};
-use open::Cmd;
 
 pub use config::{Key, Lookup, find, lookup, normalize, sequences, style};
+pub use open::{Cmd, run};
 
 /// How long a frame or a key waits for directory reads before going on without them.
 pub const LOAD_GRACE: Duration = Duration::from_millis(10);
@@ -40,6 +40,9 @@ pub enum Outcome {
     Quit,
     /// Quit without writing the cwd file, so the shell stays where it was.
     QuitNoCwd,
+    /// Show this directory in a lazi panel. Never returned by lazi itself; shop's other panels
+    /// use it.
+    Open(PathBuf),
 }
 
 pub struct Lazi {
@@ -63,6 +66,11 @@ impl Lazi {
 
     pub fn cwd(&self) -> &Path {
         &self.app.cwd
+    }
+
+    /// Shows `dir`, picked somewhere else (shop's git panel).
+    pub fn goto(&mut self, dir: &Path) {
+        self.app.goto_path(dir.to_path_buf());
     }
 
     /// The cwd, shortened the way the header shows it.

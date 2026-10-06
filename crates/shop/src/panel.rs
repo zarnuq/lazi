@@ -22,6 +22,13 @@ impl Panel {
         }
     }
 
+    /// Called when the panel gains focus.
+    pub fn show(&mut self) {
+        match self {
+            Panel::Lazi(_) => {}
+        }
+    }
+
     /// The tab bar's label.
     pub fn name(&self) -> &'static str {
         match self {

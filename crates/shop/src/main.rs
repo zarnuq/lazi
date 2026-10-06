@@ -7,7 +7,7 @@ mod panel;
 use std::ffi::OsStr;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{env, io, mem, process};
 
@@ -142,18 +142,41 @@ fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<b
         Route::Shop(Action::Focus(i)) => if *i < len { *i } else { shop.focus },
         Route::Panel(keys) => {
             for key in keys {
-                if shop.panels[shop.focus].key(term, key)? != Outcome::Continue {
-                    return Ok(true);
+                match shop.panels[shop.focus].key(term, key)? {
+                    Outcome::Continue => {}
+                    Outcome::Open(dir) => {
+                        open(term, shop, &dir)?;
+                        return Ok(false);
+                    }
+                    Outcome::Quit | Outcome::QuitNoCwd => return Ok(true),
                 }
             }
             return Ok(false);
         }
     };
+    focus(term, shop, next)?;
+    Ok(false)
+}
+
+/// Moves focus to panel `next`, taking the old one's images off the screen first.
+fn focus(term: &mut DefaultTerminal, shop: &mut Shop, next: usize) -> io::Result<()> {
     if next != shop.focus {
         shop.panels[shop.focus].hide(term.backend_mut())?;
         shop.focus = next;
+        shop.panels[next].show();
     }
-    Ok(false)
+    Ok(())
+}
+
+/// Shows `dir` in the first lazi panel and focuses it. Without a lazi panel it does nothing.
+// Lazi is the only panel until the git panel lands in the next commit.
+#[allow(irrefutable_let_patterns)]
+fn open(term: &mut DefaultTerminal, shop: &mut Shop, dir: &Path) -> io::Result<()> {
+    let Some(i) = shop.panels.iter().position(|p| matches!(p, Panel::Lazi(_))) else { return Ok(()) };
+    if let Panel::Lazi(lazi) = &mut shop.panels[i] {
+        lazi.goto(dir);
+    }
+    focus(term, shop, i)
 }
 
 /// The tab bar on the top row, the focused panel below it, as one synchronized update so the
