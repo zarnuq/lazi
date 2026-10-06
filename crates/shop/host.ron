@@ -32,6 +32,7 @@
                 "r": Refresh,
                 "g l": Run(run: "lazygit", block: true),
                 "p": Run(run: "git pull --ff-only", block: true),
+                "P": Run(run: "git push", block: true),
                 "t": Run(run: r#"kitty --directory "$1""#, block: false),
                 "c": Run(run: r#"kitty --directory "$1" claude"#, block: false),
                 "x": Run(run: r#"kitty --directory "$1" codex"#, block: false),
