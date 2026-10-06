@@ -119,6 +119,7 @@ fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBu
     ratatui::restore();
 
     if !matches!(res, Ok(Exit::Bench(_))) {
+        lazi.settle();
         for (name, list) in [("folders", &lazi.folders), ("files", &lazi.files)] {
             if let Err(e) = session::save_history(name, list) {
                 eprintln!("lazi: saving {name}: {e}");
@@ -190,11 +191,13 @@ fn run(term: &mut DefaultTerminal, lazi: &mut Lazi, bench: Option<Instant>) -> i
             if let Some(exit) = handle(term, lazi, files::normalize(key))? {
                 return Ok(exit);
             }
-            // Keys are what move files tabs, so after one is when a new folder can show up.
             if let Panel::Files(files) = &mut lazi.panels[lazi.focus] {
-                session::remember(&mut lazi.folders, files.cwd());
-                for file in files.take_opened() {
-                    session::remember(&mut lazi.files, &file);
+                let opened = files.take_opened();
+                for file in &opened {
+                    session::remember(&mut lazi.files, file);
+                }
+                if !opened.is_empty() {
+                    lazi.settle();
                 }
             }
         }
@@ -304,6 +307,15 @@ fn handle(term: &mut DefaultTerminal, lazi: &mut Lazi, key: Key) -> io::Result<O
 }
 
 impl Lazi {
+    /// Records the focused files tab's folder as visited. Called when something is done there
+    /// (a file opened, the tab left, a search started, lazi quit) rather than on every move, so
+    /// folders only passed through on the way somewhere don't fill the list.
+    fn settle(&mut self) {
+        if let Some(files) = self.panels[self.focus].files() {
+            session::remember(&mut self.folders, files.cwd());
+        }
+    }
+
     /// The open tabs, for the next start.
     fn session(&self) -> session::Session {
         let tabs = self
@@ -341,6 +353,7 @@ fn answer(term: &mut DefaultTerminal, lazi: &mut Lazi, outcome: Outcome) -> io::
             if lazi.panels.iter().position(|p| matches!(p, Panel::Files(_))) == Some(lazi.focus) {
                 return Ok(Some(Exit::Quit));
             }
+            lazi.settle();
             lazi.panels[lazi.focus].hide(term.backend_mut())?;
             lazi.panels.remove(lazi.focus);
             // The tab to the left takes over, as in yazi.
@@ -358,6 +371,7 @@ fn answer(term: &mut DefaultTerminal, lazi: &mut Lazi, outcome: Outcome) -> io::
 /// Moves focus to panel `next`, taking the old one's images off the screen first.
 fn focus(term: &mut DefaultTerminal, lazi: &mut Lazi, next: usize) -> io::Result<()> {
     if next != lazi.focus {
+        lazi.settle();
         lazi.panels[lazi.focus].hide(term.backend_mut())?;
         lazi.focus = next;
         lazi.panels[next].show();
@@ -390,6 +404,7 @@ fn reveal(term: &mut DefaultTerminal, lazi: &mut Lazi, path: &Path) -> io::Resul
 
 /// Opens the search box, with `query` already typed.
 fn open_search(lazi: &mut Lazi, query: &str) {
+    lazi.settle();
     let (root, repos) = search_root(lazi);
     match Search::open(lazi.config.search.clone(), root, repos, lazi.folders.clone()) {
         Ok(mut search) => {
