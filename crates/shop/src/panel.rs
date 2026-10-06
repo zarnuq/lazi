@@ -34,6 +34,14 @@ impl Panel {
         }
     }
 
+    /// The panel's own key bindings, as (keys, action).
+    pub fn help(&self) -> Vec<(String, String)> {
+        match self {
+            Panel::Lazi(p) => p.help(),
+            Panel::Git(p) => p.help(),
+        }
+    }
+
     /// The tab bar's label.
     pub fn name(&self) -> &'static str {
         match self {

@@ -217,6 +217,7 @@ impl Git {
             GitAction::Top => self.cursor = 0,
             GitAction::Bottom => self.cursor = last,
             GitAction::Refresh => self.refresh(),
+            GitAction::Help => return Ok(Outcome::Help),
             GitAction::Open => {
                 if let Some(path) = all.get(self.cursor) {
                     return Ok(Outcome::Open(path.clone()));
@@ -242,6 +243,11 @@ impl Git {
             }
         }
         Ok(Outcome::Continue)
+    }
+
+    /// Every binding, as (keys, action), for the help menu.
+    pub fn help(&self) -> Vec<(String, String)> {
+        self.spec.keys.iter().map(|(keys, action)| (lazi::key_label(keys), format!("{action:?}"))).collect()
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {

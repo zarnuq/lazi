@@ -298,7 +298,7 @@
             "a": Create,
             "r": Rename,
             "/": Find,
-            "?": FindBack,
+            "?": Help,
             "n": FindNext,
             "N": FindPrev,
             "f": Filter,

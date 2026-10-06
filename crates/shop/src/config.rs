@@ -75,7 +75,7 @@ pub struct GitStyles {
     pub cursor: Style,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Clone, Debug)]
 pub enum GitAction {
     Down,
     Up,
@@ -88,6 +88,8 @@ pub enum GitAction {
     /// A `sh -c` snippet run in the repo, with its path as $1: blocking hands over the
     /// terminal and waits; otherwise it's detached and only a failure is reported.
     Run { run: String, block: bool },
+    /// Show the key bindings.
+    Help,
 }
 
 #[derive(Deserialize)]

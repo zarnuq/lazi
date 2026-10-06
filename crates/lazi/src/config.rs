@@ -212,7 +212,7 @@ pub struct Keys {
     pub confirm: Confirm,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub enum Action {
     Quit,
     /// Quit without writing the cwd file, so the shell stays where it was.
@@ -273,10 +273,12 @@ pub enum Action {
         #[serde(default)]
         reveal: bool,
     },
+    /// Show every key binding; shop draws the menu.
+    Help,
 }
 
 /// Which part of the targets' paths to copy.
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 pub enum Part {
     Path,
     Dir,
@@ -505,26 +507,31 @@ fn char_key(c: char, mut modifiers: KeyModifiers) -> Key {
     (KeyCode::Char(c), modifiers)
 }
 
+/// Key names the config accepts besides characters and F1-F24.
+const KEY_NAMES: [(&str, KeyCode); 16] = [
+    ("Enter", KeyCode::Enter),
+    ("Esc", KeyCode::Esc),
+    ("Tab", KeyCode::Tab),
+    ("BackTab", KeyCode::BackTab),
+    ("Backspace", KeyCode::Backspace),
+    ("Delete", KeyCode::Delete),
+    ("Insert", KeyCode::Insert),
+    ("Home", KeyCode::Home),
+    ("End", KeyCode::End),
+    ("PageUp", KeyCode::PageUp),
+    ("PageDown", KeyCode::PageDown),
+    ("Up", KeyCode::Up),
+    ("Down", KeyCode::Down),
+    ("Left", KeyCode::Left),
+    ("Right", KeyCode::Right),
+    ("Space", KeyCode::Char(' ')),
+];
+
 fn named(name: &str) -> Option<KeyCode> {
-    Some(match name {
-        "Enter" => KeyCode::Enter,
-        "Esc" => KeyCode::Esc,
-        "Tab" => KeyCode::Tab,
-        "BackTab" => KeyCode::BackTab,
-        "Backspace" => KeyCode::Backspace,
-        "Delete" => KeyCode::Delete,
-        "Insert" => KeyCode::Insert,
-        "Home" => KeyCode::Home,
-        "End" => KeyCode::End,
-        "PageUp" => KeyCode::PageUp,
-        "PageDown" => KeyCode::PageDown,
-        "Up" => KeyCode::Up,
-        "Down" => KeyCode::Down,
-        "Left" => KeyCode::Left,
-        "Right" => KeyCode::Right,
-        "Space" => KeyCode::Char(' '),
-        _ => KeyCode::F(name.strip_prefix('F')?.parse().ok().filter(|n| (1..=24).contains(n))?),
-    })
+    if let Some((_, code)) = KEY_NAMES.iter().find(|(n, _)| *n == name) {
+        return Some(*code);
+    }
+    Some(KeyCode::F(name.strip_prefix('F')?.parse().ok().filter(|n| (1..=24).contains(n))?))
 }
 
 pub enum Lookup<'a, A> {
@@ -555,4 +562,43 @@ pub fn normalize(key: KeyEvent) -> Key {
         mods.remove(KeyModifiers::SHIFT);
     }
     (key.code, mods)
+}
+
+/// Writes a binding back the way the config spells it ("Ctrl+x Ctrl+s", "g g"), for the help
+/// menu.
+pub fn key_label(keys: &[Key]) -> String {
+    let words: Vec<String> = keys
+        .iter()
+        .map(|&(code, mods)| {
+            let mut word = String::new();
+            for (flag, name) in
+                [(KeyModifiers::CONTROL, "Ctrl+"), (KeyModifiers::ALT, "Alt+"), (KeyModifiers::SHIFT, "Shift+"), (KeyModifiers::SUPER, "Super+")]
+            {
+                if mods.contains(flag) {
+                    word.push_str(name);
+                }
+            }
+            match code {
+                KeyCode::Char(' ') => word.push_str("Space"),
+                KeyCode::Char(c) => word.push(c),
+                KeyCode::F(n) => word.push_str(&format!("F{n}")),
+                code => word.push_str(KEY_NAMES.iter().find(|(_, c)| *c == code).map_or("?", |(name, _)| name)),
+            }
+            word
+        })
+        .collect();
+    words.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The help menu shows bindings the way the config writes them.
+    #[test]
+    fn key_label_writes_what_sequence_reads() {
+        for name in ["q", "g g", "G", "Ctrl+u", "Alt+1", "Shift+PageUp", "Space", "Enter", "Ctrl+x Ctrl+s", "F5", "BackTab", "+"] {
+            assert_eq!(key_label(&sequence(name).unwrap()), name);
+        }
+    }
 }

@@ -172,7 +172,8 @@ These are the bindings in the example `config.ron`.
 | `d` / `D` | Trash / delete permanently |
 | `a` | Create a file, or a directory if the name ends in `/` |
 | `r` | Rename |
-| `/` `?` | Find forward / backward; `Tab` completes and moves into directories, `S-Tab` steps through matches |
+| `/` | Find; `Tab` completes and moves into directories, `S-Tab` steps through matches |
+| `?` | Every key binding of the current tab and shop's own |
 | `n` `N` | Next / previous match |
 | `f` | Filter the listing |
 | `Esc` | Clear the selection, else the filter, else the find highlight |

@@ -7,6 +7,7 @@ mod git;
 mod panel;
 mod status;
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
@@ -21,6 +22,9 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate, SetTitle};
 use ratatui::crossterm::{execute, queue};
 use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Clear, Widget};
 
 use config::{Action, Config, PanelSpec};
 use panel::Panel;
@@ -31,6 +35,8 @@ struct Shop {
     focus: usize,
     /// Keys typed toward a shop binding that is a sequence.
     pending: Vec<Key>,
+    /// The key-binding menu is up; the next key closes it.
+    help: bool,
 }
 
 enum Exit {
@@ -83,7 +89,7 @@ fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBu
         *start = Some(dir);
     }
     let panels = config.panels.iter().map(Panel::new).collect::<Result<Vec<_>, _>>()?;
-    let mut shop = Shop { config, panels, focus: 0, pending: Vec::new() };
+    let mut shop = Shop { config, panels, focus: 0, pending: Vec::new(), help: false };
     let mut term = ratatui::init();
     let res = run(&mut term, &mut shop, bench);
     for panel in &mut shop.panels {
@@ -180,6 +186,11 @@ fn route<'a>(bound: &'a [(Vec<Key>, Action)], pending: &mut Vec<Key>, key: Key) 
 
 /// Handles a key press. Returns how shop should exit, if it should.
 fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<Option<Exit>> {
+    if shop.help {
+        // Any key closes the menu, and only closes it.
+        shop.help = false;
+        return Ok(None);
+    }
     let len = shop.panels.len();
     let next = match route(&shop.config.keys, &mut shop.pending, key) {
         Route::Wait => return Ok(None),
@@ -193,6 +204,10 @@ fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<O
                     Outcome::Continue => {}
                     Outcome::Open(dir) => {
                         open(term, shop, &dir)?;
+                        return Ok(None);
+                    }
+                    Outcome::Help => {
+                        shop.help = true;
                         return Ok(None);
                     }
                     Outcome::Quit => return Ok(Some(Exit::Quit)),
@@ -237,9 +252,64 @@ fn draw(term: &mut DefaultTerminal, shop: &mut Shop) -> io::Result<()> {
         tabs(frame.buffer_mut(), Rect { height: 1, ..area }, shop);
         let body = Rect { y: area.y + 1, height: area.height - 1, ..area };
         shop.panels[shop.focus].draw(frame, body);
+        if shop.help {
+            help(frame.buffer_mut(), body, shop);
+        }
     })?;
-    shop.panels[shop.focus].sync_image(term.backend_mut())?;
+    if shop.help {
+        // An image would sit on top of the menu.
+        shop.panels[shop.focus].hide(term.backend_mut())?;
+    } else {
+        shop.panels[shop.focus].sync_image(term.backend_mut())?;
+    }
     execute!(term.backend_mut(), EndSynchronizedUpdate)
+}
+
+/// The key-binding menu over the panel: shop's own keys, then the focused panel's, in as many
+/// columns as fit. ponytail: anything past the last column is cut; scroll it if a keymap ever
+/// outgrows a screen.
+fn help(buf: &mut Buffer, area: Rect, shop: &Shop) {
+    let style = &shop.config.style;
+    let ours: Vec<(String, String)> = shop.config.keys.iter().map(|(keys, action)| (lazi::key_label(keys), format!("{action:?}"))).collect();
+    let panel = &shop.panels[shop.focus];
+    let mut lines: Vec<Line> = Vec::new();
+    for (title, entries) in [("shop", ours), (panel.name(), panel.help())] {
+        lines.push(Line::from(Span::styled(title.to_owned(), style.tab_focused)));
+        // Keymaps are unordered; one line per action, alphabetical, with all its keys.
+        let mut by_action: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (keys, action) in entries {
+            by_action.entry(action).or_default().push(keys);
+        }
+        let entries: Vec<(String, String)> = by_action
+            .into_iter()
+            .map(|(action, mut keys)| {
+                keys.sort();
+                (keys.join(", "), action)
+            })
+            .collect();
+        let key_w = entries.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0).min(16);
+        for (keys, action) in entries {
+            lines.push(Line::from(vec![Span::styled(format!("{keys:<key_w$}  "), Style::new().add_modifier(Modifier::BOLD)), Span::raw(action)]));
+        }
+        lines.push(Line::default());
+    }
+    Clear.render(area, buf);
+    let block = Block::bordered().title(" keys · any key closes ");
+    let inner = block.inner(area);
+    block.render(area, buf);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    const COLUMN: u16 = 44;
+    let columns = (inner.width / COLUMN).max(1);
+    let width = inner.width / columns;
+    for (i, line) in lines.iter().enumerate() {
+        let (col, row) = (i / inner.height as usize, i % inner.height as usize);
+        if col >= columns as usize {
+            break;
+        }
+        buf.set_line(inner.x + col as u16 * width, inner.y + row as u16, line, width.saturating_sub(1));
+    }
 }
 
 /// Panel names with the focused one highlighted, and at the right any shop prefix being typed.

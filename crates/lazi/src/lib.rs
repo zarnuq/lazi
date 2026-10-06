@@ -27,7 +27,7 @@ use ratatui::{DefaultTerminal, Frame};
 use app::{App, Menu, Prompt};
 use config::{Action, MenuAction, Opener, PromptAction};
 
-pub use config::{Key, Lookup, find, lookup, normalize, sequences, style};
+pub use config::{Key, Lookup, find, key_label, lookup, normalize, sequences, style};
 pub use open::{Cmd, run};
 
 /// How long a frame or a key waits for directory reads before going on without them.
@@ -43,6 +43,8 @@ pub enum Outcome {
     /// Show this directory in a lazi panel. Never returned by lazi itself; shop's other panels
     /// use it.
     Open(PathBuf),
+    /// Show the key bindings.
+    Help,
 }
 
 pub struct Lazi {
@@ -66,6 +68,11 @@ impl Lazi {
 
     pub fn cwd(&self) -> &Path {
         &self.app.cwd
+    }
+
+    /// Every normal-mode binding, as (keys, action), for the help menu.
+    pub fn help(&self) -> Vec<(String, String)> {
+        config::get().keys.normal.iter().map(|(keys, action)| (key_label(keys), format!("{action:?}"))).collect()
     }
 
     /// Shows `dir`, picked somewhere else (shop's git panel).
@@ -159,6 +166,7 @@ fn apply(term: &mut DefaultTerminal, app: &mut App, action: &Action) -> io::Resu
     match action {
         Action::Quit => return Ok(Outcome::Quit),
         Action::QuitNoCwd => return Ok(Outcome::QuitNoCwd),
+        Action::Help => return Ok(Outcome::Help),
         Action::Move(delta) => app.move_by(*delta),
         Action::Page(percent) => app.page(*percent),
         Action::Top => app.move_to(0),

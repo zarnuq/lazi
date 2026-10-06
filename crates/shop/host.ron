@@ -33,6 +33,7 @@
                 "j": Down, "k": Up, "Down": Down, "Up": Up, "g g": Top, "G": Bottom,
                 "Enter": Open, "l": Open,
                 "r": Refresh,
+                "?": Help,
                 "g l": Run(run: "lazygit", block: true),
                 "p": Run(run: "git pull --ff-only", block: true),
                 "P": Run(run: "git push", block: true),
