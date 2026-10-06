@@ -16,7 +16,21 @@ pub struct Config {
     pub style: Styles,
     /// Whatever no binding here claims goes to the focused panel.
     #[serde(deserialize_with = "lazi::sequences")]
-    pub keys: Vec<(Vec<Key>, Action)>,
+    pub keys: Vec<(Vec<Key>, Action)>,    /// While the `?` menu is up. Unbound keys do nothing.
+    #[serde(deserialize_with = "lazi::sequences")]
+    pub help_keys: Vec<(Vec<Key>, HelpAction)>,
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+pub enum HelpAction {
+    Down,
+    Up,
+    /// Half the menu's height.
+    PageDown,
+    PageUp,
+    Top,
+    Bottom,
+    Close,
 }
 
 #[derive(Deserialize)]

@@ -26,7 +26,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Widget};
 
-use config::{Action, Config, PanelSpec};
+use config::{Action, Config, HelpAction, PanelSpec};
 use panel::Panel;
 
 struct Shop {
@@ -35,8 +35,10 @@ struct Shop {
     focus: usize,
     /// Keys typed toward a shop binding that is a sequence.
     pending: Vec<Key>,
-    /// The key-binding menu is up; the next key closes it.
-    help: bool,
+    /// The key-binding menu's first visible line, while it's up.
+    help: Option<usize>,
+    /// How many menu lines fit, from the last frame, for paging.
+    help_page: usize,
 }
 
 enum Exit {
@@ -89,7 +91,7 @@ fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBu
         *start = Some(dir);
     }
     let panels = config.panels.iter().map(Panel::new).collect::<Result<Vec<_>, _>>()?;
-    let mut shop = Shop { config, panels, focus: 0, pending: Vec::new(), help: false };
+    let mut shop = Shop { config, panels, focus: 0, pending: Vec::new(), help: None, help_page: 0 };
     let mut term = ratatui::init();
     let res = run(&mut term, &mut shop, bench);
     for panel in &mut shop.panels {
@@ -186,9 +188,17 @@ fn route<'a>(bound: &'a [(Vec<Key>, Action)], pending: &mut Vec<Key>, key: Key) 
 
 /// Handles a key press. Returns how shop should exit, if it should.
 fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<Option<Exit>> {
-    if shop.help {
-        // Any key closes the menu, and only closes it.
-        shop.help = false;
+    if let Some(top) = shop.help {
+        // The menu takes every key; ones it doesn't bind do nothing.
+        shop.pending.push(key);
+        match lazi::lookup(&shop.config.help_keys, &shop.pending) {
+            Lookup::Pending => {}
+            Lookup::Unbound => shop.pending.clear(),
+            Lookup::Action(action) => {
+                shop.help = scroll(top, action, shop.help_page);
+                shop.pending.clear();
+            }
+        }
         return Ok(None);
     }
     let len = shop.panels.len();
@@ -207,7 +217,7 @@ fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<O
                         return Ok(None);
                     }
                     Outcome::Help => {
-                        shop.help = true;
+                        shop.help = Some(0);
                         return Ok(None);
                     }
                     Outcome::Quit => return Ok(Some(Exit::Quit)),
@@ -252,11 +262,11 @@ fn draw(term: &mut DefaultTerminal, shop: &mut Shop) -> io::Result<()> {
         tabs(frame.buffer_mut(), Rect { height: 1, ..area }, shop);
         let body = Rect { y: area.y + 1, height: area.height - 1, ..area };
         shop.panels[shop.focus].draw(frame, body);
-        if shop.help {
+        if shop.help.is_some() {
             help(frame.buffer_mut(), body, shop);
         }
     })?;
-    if shop.help {
+    if shop.help.is_some() {
         // An image would sit on top of the menu.
         shop.panels[shop.focus].hide(term.backend_mut())?;
     } else {
@@ -265,10 +275,9 @@ fn draw(term: &mut DefaultTerminal, shop: &mut Shop) -> io::Result<()> {
     execute!(term.backend_mut(), EndSynchronizedUpdate)
 }
 
-/// The key-binding menu over the panel: shop's own keys, then the focused panel's, in as many
-/// columns as fit. ponytail: anything past the last column is cut; scroll it if a keymap ever
-/// outgrows a screen.
-fn help(buf: &mut Buffer, area: Rect, shop: &Shop) {
+/// The key-binding menu over the panel: shop's own keys, then the focused panel's, one
+/// scrollable column.
+fn help(buf: &mut Buffer, area: Rect, shop: &mut Shop) {
     let style = &shop.config.style;
     let ours: Vec<(String, String)> = shop.config.keys.iter().map(|(keys, action)| (lazi::key_label(keys), format!("{action:?}"))).collect();
     let panel = &shop.panels[shop.focus];
@@ -294,21 +303,17 @@ fn help(buf: &mut Buffer, area: Rect, shop: &Shop) {
         lines.push(Line::default());
     }
     Clear.render(area, buf);
-    let block = Block::bordered().title(" keys · any key closes ");
+    let page = area.height.saturating_sub(2) as usize;
+    // Clamp here, where the total is known, so Bottom (usize::MAX) lands on the last page.
+    let top = shop.help.unwrap_or(0).min(lines.len().saturating_sub(page));
+    shop.help = Some(top);
+    shop.help_page = page;
+    let shown = format!(" keys · {}-{} of {} · q closes ", top + 1, (top + page).min(lines.len()), lines.len());
+    let block = Block::bordered().title(shown);
     let inner = block.inner(area);
     block.render(area, buf);
-    if inner.height == 0 || inner.width == 0 {
-        return;
-    }
-    const COLUMN: u16 = 44;
-    let columns = (inner.width / COLUMN).max(1);
-    let width = inner.width / columns;
-    for (i, line) in lines.iter().enumerate() {
-        let (col, row) = (i / inner.height as usize, i % inner.height as usize);
-        if col >= columns as usize {
-            break;
-        }
-        buf.set_line(inner.x + col as u16 * width, inner.y + row as u16, line, width.saturating_sub(1));
+    for (row, line) in lines.iter().skip(top).take(inner.height as usize).enumerate() {
+        buf.set_line(inner.x, inner.y + row as u16, line, inner.width);
     }
 }
 
@@ -345,9 +350,35 @@ fn key_name((code, mods): Key) -> String {
     name
 }
 
+/// Where the help menu's first line ends up after `action`, given the lines that fit (`page`);
+/// None closes it. Past the end is clamped when it's drawn, which knows the total.
+fn scroll(top: usize, action: &HelpAction, page: usize) -> Option<usize> {
+    let half = (page / 2).max(1);
+    Some(match action {
+        HelpAction::Down => top + 1,
+        HelpAction::Up => top.saturating_sub(1),
+        HelpAction::PageDown => top + half,
+        HelpAction::PageUp => top.saturating_sub(half),
+        HelpAction::Top => 0,
+        HelpAction::Bottom => usize::MAX,
+        HelpAction::Close => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_scrolls_by_line_and_half_page_and_closes() {
+        assert_eq!(scroll(0, &HelpAction::Down, 20), Some(1));
+        assert_eq!(scroll(0, &HelpAction::Up, 20), Some(0));
+        assert_eq!(scroll(30, &HelpAction::PageUp, 20), Some(20));
+        assert_eq!(scroll(5, &HelpAction::PageDown, 20), Some(15));
+        assert_eq!(scroll(5, &HelpAction::Top, 20), Some(0));
+        assert_eq!(scroll(5, &HelpAction::Bottom, 20), Some(usize::MAX));
+        assert_eq!(scroll(5, &HelpAction::Close, 20), None);
+    }
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 
     const CTRL_X: Key = (KeyCode::Char('x'), KeyModifiers::CONTROL);
