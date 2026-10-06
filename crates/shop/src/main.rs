@@ -3,6 +3,9 @@
 
 mod config;
 mod panel;
+// Used by the git panel from the next commit on.
+#[cfg_attr(not(test), allow(dead_code))]
+mod status;
 
 use std::ffi::OsStr;
 use std::os::fd::AsRawFd;
