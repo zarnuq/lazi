@@ -1,5 +1,6 @@
-//! shop: a terminal workspace that shows one panel at a time. Every key goes to shop's own
-//! bindings first (all behind a prefix like Ctrl+x); the rest go to the focused panel.
+//! shop: a terminal workspace that shows one panel at a time, the lazi file browser first.
+//! Every key goes to shop's own bindings first (chords like Alt+1 that panels don't use); the
+//! rest go to the focused panel.
 
 mod config;
 mod git;
@@ -10,7 +11,7 @@ use std::ffi::OsStr;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{env, io, mem, process};
 
 use lazi::{Key, LOAD_GRACE, Lookup, Outcome, wake};
@@ -21,52 +22,92 @@ use ratatui::crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdat
 use ratatui::crossterm::{execute, queue};
 use ratatui::layout::Rect;
 
-use config::{Action, Config};
+use config::{Action, Config, PanelSpec};
 use panel::Panel;
 
 struct Shop {
     config: Config,
     panels: Vec<Panel>,
     focus: usize,
-    /// Keys typed toward a shop binding, like the Ctrl+x of "Ctrl+x b".
+    /// Keys typed toward a shop binding that is a sequence.
     pending: Vec<Key>,
 }
 
+enum Exit {
+    Quit,
+    /// Quit without writing the cwd file, so the shell stays where it was.
+    QuitNoCwd,
+    /// Time to first frame.
+    Bench(Duration),
+}
+
 fn main() {
+    let start = Instant::now();
+    let mut bench = false;
+    let mut cwd_file = None;
     let mut config = None;
+    let mut dir = None;
     let mut args = env::args_os().skip(1);
     while let Some(arg) = args.next() {
-        if arg == "--config" {
+        if arg == "--bench" {
+            bench = true;
+        } else if arg == "--cwd-file" {
+            cwd_file = args.next().map(PathBuf::from);
+        } else if let Some(path) = arg.as_bytes().strip_prefix(b"--cwd-file=") {
+            cwd_file = Some(PathBuf::from(OsStr::from_bytes(path)));
+        } else if arg == "--config" {
             config = args.next().map(PathBuf::from);
         } else if let Some(path) = arg.as_bytes().strip_prefix(b"--config=") {
             config = Some(PathBuf::from(OsStr::from_bytes(path)));
-        } else {
+        } else if arg.as_bytes().starts_with(b"-") {
             eprintln!("shop: unknown argument {}", arg.to_string_lossy());
             process::exit(2);
+        } else {
+            dir = Some(PathBuf::from(arg));
         }
     }
-    if let Err(e) = start(config) {
+    if let Err(e) = launch(config, dir, cwd_file, bench.then_some(start)) {
         eprintln!("shop: {e}");
         process::exit(1);
     }
 }
 
 /// Everything that can fail before the terminal is taken happens first, so errors print to a
-/// normal screen.
-fn start(config: Option<PathBuf>) -> Result<(), String> {
-    let config = config::load(config)?;
+/// normal screen. `dir` overrides where the first lazi panel starts; `cwd_file` gets where it
+/// ended, for a shell wrapper to cd into.
+fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBuf>, bench: Option<Instant>) -> Result<(), String> {
+    let mut config = config::load(config)?;
+    if let Some(dir) = dir
+        && let Some(PanelSpec::Lazi { dir: start, .. }) = config.panels.iter_mut().find(|p| matches!(p, PanelSpec::Lazi { .. }))
+    {
+        *start = Some(dir);
+    }
     let panels = config.panels.iter().map(Panel::new).collect::<Result<Vec<_>, _>>()?;
     let mut shop = Shop { config, panels, focus: 0, pending: Vec::new() };
     let mut term = ratatui::init();
-    let res = run(&mut term, &mut shop);
+    let res = run(&mut term, &mut shop, bench);
     for panel in &mut shop.panels {
         let _ = panel.clear_images(term.backend_mut());
     }
     ratatui::restore();
-    res.map_err(|e| e.to_string())
+
+    let lazi = shop.panels.iter().find_map(|p| match p {
+        Panel::Lazi(lazi) => Some(lazi),
+        _ => None,
+    });
+    match res.map_err(|e| e.to_string())? {
+        Exit::Quit => {
+            if let (Some(path), Some(lazi)) = (cwd_file, lazi) {
+                std::fs::write(&path, lazi.cwd().as_os_str().as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+            }
+        }
+        Exit::QuitNoCwd => {}
+        Exit::Bench(elapsed) => eprintln!("first frame: {elapsed:?} ({} entries)", lazi.map_or(0, |l| l.entry_count())),
+    }
+    Ok(())
 }
 
-fn run(term: &mut DefaultTerminal, shop: &mut Shop) -> io::Result<()> {
+fn run(term: &mut DefaultTerminal, shop: &mut Shop, bench: Option<Instant>) -> io::Result<Exit> {
     let (tty, _tty_file) = wake::tty()?;
     let winch = wake::winch()?;
     let mut fds = vec![tty, winch.as_raw_fd()];
@@ -78,11 +119,15 @@ fn run(term: &mut DefaultTerminal, shop: &mut Shop) -> io::Result<()> {
     loop {
         if dirty {
             // Hold the frame briefly so fast reads land in it instead of flashing an empty column.
-            shop.panels[shop.focus].receive(Some(LOAD_GRACE));
+            // A benchmark waits for everything, so it measures a complete frame.
+            shop.panels[shop.focus].receive(if bench.is_some() { None } else { Some(LOAD_GRACE) });
             // Every frame, since programs a panel hands the terminal to may have changed it.
             queue!(term.backend_mut(), SetTitle(format!("shop: {}", shop.panels[shop.focus].title())))?;
             draw(term, shop)?;
             dirty = false;
+            if let Some(start) = bench {
+                return Ok(Exit::Bench(start.elapsed()));
+            }
         }
 
         // Sleep until a key, a panel's worker or watcher, or a resize, unless crossterm already
@@ -101,8 +146,8 @@ fn run(term: &mut DefaultTerminal, shop: &mut Shop) -> io::Result<()> {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
-            if handle(term, shop, lazi::normalize(key))? {
-                return Ok(());
+            if let Some(exit) = handle(term, shop, lazi::normalize(key))? {
+                return Ok(exit);
             }
         }
         for panel in &mut shop.panels {
@@ -133,12 +178,12 @@ fn route<'a>(bound: &'a [(Vec<Key>, Action)], pending: &mut Vec<Key>, key: Key) 
     }
 }
 
-/// Handles a key press. Returns whether shop should quit.
-fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<bool> {
+/// Handles a key press. Returns how shop should exit, if it should.
+fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<Option<Exit>> {
     let len = shop.panels.len();
     let next = match route(&shop.config.keys, &mut shop.pending, key) {
-        Route::Wait => return Ok(false),
-        Route::Shop(Action::Quit) => return Ok(true),
+        Route::Wait => return Ok(None),
+        Route::Shop(Action::Quit) => return Ok(Some(Exit::Quit)),
         Route::Shop(Action::Next) => (shop.focus + 1) % len,
         Route::Shop(Action::Prev) => (shop.focus + len - 1) % len,
         Route::Shop(Action::Focus(i)) => if *i < len { *i } else { shop.focus },
@@ -148,16 +193,17 @@ fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<b
                     Outcome::Continue => {}
                     Outcome::Open(dir) => {
                         open(term, shop, &dir)?;
-                        return Ok(false);
+                        return Ok(None);
                     }
-                    Outcome::Quit | Outcome::QuitNoCwd => return Ok(true),
+                    Outcome::Quit => return Ok(Some(Exit::Quit)),
+                    Outcome::QuitNoCwd => return Ok(Some(Exit::QuitNoCwd)),
                 }
             }
-            return Ok(false);
+            return Ok(None);
         }
     };
     focus(term, shop, next)?;
-    Ok(false)
+    Ok(None)
 }
 
 /// Moves focus to panel `next`, taking the old one's images off the screen first.

@@ -1,43 +1,44 @@
-# lazi
+# shop
 
-A small, fast terminal file manager in the style of [yazi](https://github.com/sxyazi/yazi)
-and ranger: three columns (parent, current, preview), vim keys, and image previews over
-kitty's graphics protocol. Every key, previewer, opener and colour comes from a config file;
-nothing is built in.
+A terminal workspace, one tab at a time. Its main tab is **lazi**, a small, fast file manager
+in the style of [yazi](https://github.com/sxyazi/yazi) and ranger: three columns (parent,
+current, preview), vim keys, and image previews over kitty's graphics protocol. A **git** tab
+lists every repository under your project folders with zhimmer-style status symbols
+(uncommitted changes, commits to push and to pull), fetched in the background. Every key,
+previewer, opener and colour comes from config files; nothing is built in.
 
 Linux only (inotify, eventfd, memfd).
 
 ## Install
 
-Gentoo: `app-misc/lazi` in the [zarnuq overlay](https://github.com/zarnuq/gentoo-overlay).
+Gentoo: `app-misc/shop` in the [zarnuq overlay](https://github.com/zarnuq/gentoo-overlay).
 
 From source (Rust 1.88+):
 
 ```sh
-cargo install --path crates/lazi
-mkdir -p ~/.config/lazi && cp crates/lazi/config.ron ~/.config/lazi/
+cargo install --path crates/shop
+mkdir -p ~/.config/shop ~/.config/lazi
+cp crates/shop/host.ron ~/.config/shop/
+cp crates/lazi/config.ron ~/.config/lazi/
 ```
-
-## shop
-
-`crates/shop` is an experimental host that runs lazi as one panel of a terminal workspace,
-next to a git panel that lists every repo under your project folders with zhimmer-style
-status symbols (uncommitted changes, commits to push and to pull), fetched in the background.
-shop has `Ctrl+x` bindings of its own. See `crates/shop/host.ron`.
 
 ## Usage
 
 ```sh
-lazi [DIR] [--cwd-file PATH] [--config PATH]
+shop [DIR] [--cwd-file PATH] [--config PATH]
 ```
 
-`--cwd-file` writes the directory lazi was in when you quit with `q` (not `Q`). A shell
-wrapper to follow it:
+`Alt+1` shows the file browser, `Alt+2` the git tab, `Alt+q` quits (so does lazi's `q`).
+`DIR` is where the file browser starts. `--config` is shop's `host.ron`; lazi's own settings
+are always `config.ron` (below).
+
+`--cwd-file` writes the directory the file browser was in when you quit with `q` or `Alt+q`
+(not `Q`). A shell wrapper to follow it:
 
 ```sh
 l() {
     local tmp="$(mktemp)"
-    lazi --cwd-file "$tmp" "$@"
+    shop --cwd-file "$tmp" "$@"
     local dir="$(cat "$tmp")"
     rm -f "$tmp"
     [ -n "$dir" ] && [ "$dir" != "$PWD" ] && cd "$dir"
@@ -46,9 +47,17 @@ l() {
 
 `--bench` prints the time to the first complete frame and exits.
 
+## The git tab
+
+Configured in `host.ron` (see [`crates/shop/host.ron`](crates/shop/host.ron)): the folders
+whose direct subdirectories are repositories, how often to fetch, the symbols and colours, and
+the keys. `Enter` opens a repo in the file browser; `Run` bindings run a command in it, with
+its path as `$1`, either taking over the terminal (`git pull`, lazygit) or in the background (a
+new terminal window). Status updates as soon as a commit, checkout or pull happens elsewhere.
+
 ## Configuration
 
-lazi reads the first of `--config PATH`, `$XDG_CONFIG_HOME/lazi/config.ron` (usually
+The file browser reads the first of `$XDG_CONFIG_HOME/lazi/config.ron` (usually
 `~/.config/lazi/config.ron`) and `$XDG_CONFIG_DIRS/lazi/config.ron` (usually
 `/etc/xdg/lazi/config.ron`). There are no built-in defaults: every setting is required, an
 unbound key does nothing, and lazi refuses to start without a config, or with a mistake in
