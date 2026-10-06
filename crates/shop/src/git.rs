@@ -146,9 +146,11 @@ impl Git {
         let Some(watcher) = &mut self.watcher else { return false };
         let changed = watcher.changed();
         if !changed.is_empty() {
-            // Each repo's watched directories (.git, .git/refs/heads) lie under it.
+            // Each repo's watched directories lie under it.
             let repos = self.all().into_iter().filter(|repo| changed.iter().any(|dir| dir.starts_with(repo))).collect();
             self.status(repos);
+            // A new branch like `feat/y` may have made a directory nothing watches yet.
+            self.watch();
         }
         false
     }
@@ -271,8 +273,9 @@ impl Git {
         let height = list.height as usize;
         if let Some(row) = cursor_row {
             if row < self.offset {
-                // Show the root header above the first repo rather than cutting it off.
-                self.offset = row.saturating_sub(1);
+                // Show the root header above the first repo rather than cutting it off, when
+                // there's room for both.
+                self.offset = if height > 1 { row.saturating_sub(1) } else { row };
             } else if row >= self.offset + height {
                 self.offset = row + 1 - height;
             }
@@ -302,7 +305,9 @@ impl Git {
     /// One repo's row: name, branch, symbols, and fetch state.
     fn row(&self, path: &Path, name_w: usize, branch_w: usize) -> Line<'static> {
         let style = &self.spec.style;
-        let mut spans = vec![Span::raw(format!("  {:<name_w$}  ", name(path)))];
+        // Cut to the column, like the branch below, so the columns stay in line.
+        let cut: String = name(path).chars().take(name_w).collect();
+        let mut spans = vec![Span::raw(format!("  {cut:<name_w$}  "))];
         let repo = self.repos.get(path);
         match repo.and_then(|r| r.status.as_ref()) {
             None => {}
@@ -336,6 +341,10 @@ impl Git {
                 return (err.clone(), self.spec.style.error);
             }
         }
+        // A background command can fail after the cursor has moved on; say where.
+        if let Some((path, err)) = self.repos.iter().find_map(|(path, repo)| Some((path, repo.run_error.as_ref()?))) {
+            return (format!("{}: {err}", name(path)), self.spec.style.error);
+        }
         let (mut push, mut pull, mut dirty) = (0, 0, 0);
         for s in self.repos.values().filter_map(|r| r.status.as_ref()?.as_ref().ok()) {
             let (ahead, behind) = s.ahead_behind.unwrap_or((0, 0));
@@ -362,15 +371,20 @@ impl Git {
         for path in &all {
             self.repos.entry(path.clone()).or_default();
         }
-        if let Some(watcher) = &mut self.watcher {
-            // git writes the index, HEAD and branch refs through a lock file and a rename, which
-            // these catch; commits, checkouts and pulls made elsewhere show up at once.
-            let dirs: Vec<PathBuf> = all.iter().flat_map(|repo| [repo.join(".git"), repo.join(".git/refs/heads")]).collect();
-            watcher.set(&dirs);
-        }
+        self.watch();
         self.cursor = self.cursor.min(all.len().saturating_sub(1));
         self.status(all.clone());
         self.fetch(all);
+    }
+
+    /// Watches every repo's `.git` and branch directories. git writes the index, HEAD and
+    /// branch refs through a lock file and a rename, which these catch, so commits, checkouts
+    /// and pulls made elsewhere show up at once.
+    fn watch(&mut self) {
+        let dirs: Vec<PathBuf> = self.all().iter().flat_map(|repo| status::watch_dirs(repo)).collect();
+        if let Some(watcher) = &mut self.watcher {
+            watcher.set(&dirs);
+        }
     }
 
     fn status(&self, repos: Vec<PathBuf>) {

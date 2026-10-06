@@ -66,7 +66,7 @@ behind a prefix (`Ctrl+x`) that panels don't use. New panels are a `Panel` varia
 
 ```sh
 cargo run -p shop -- --config crates/shop/host.ron
-cargo test -p shop          # the one test: prefix routing
+cargo test -p shop          # routing, status parsing, discovery, the reference host.ron
 ```
 
 ## Conventions & gotchas

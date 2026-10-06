@@ -96,6 +96,21 @@ pub fn discover(root: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(repos)
 }
 
+/// The directories to watch so a commit, checkout or reset in `repo` is seen at once: `.git`
+/// (git renames the index and HEAD into place there) and every directory of branch refs,
+/// since a branch like `feat/x` lives in `refs/heads/feat/` and inotify isn't recursive.
+pub fn watch_dirs(repo: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![repo.join(".git")];
+    let mut todo = vec![repo.join(".git/refs/heads")];
+    while let Some(dir) = todo.pop() {
+        if let Ok(entries) = fs::read_dir(&dir) {
+            todo.extend(entries.filter_map(Result::ok).filter(|e| e.file_type().is_ok_and(|t| t.is_dir())).map(|e| e.path()));
+            dirs.push(dir);
+        }
+    }
+    dirs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +179,20 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let names: Vec<String> = found.unwrap().iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
         assert_eq!(names, ["Alpha", "beta", "wt"]);
+    }
+
+    #[test]
+    fn watch_dirs_cover_branches_with_slashes() {
+        let repo = std::env::temp_dir().join(format!("shop-watch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&repo);
+        fs::create_dir_all(repo.join(".git/refs/heads/feat/deep")).unwrap();
+        fs::create_dir_all(repo.join(".git/refs/heads/fix")).unwrap();
+        fs::write(repo.join(".git/refs/heads/main"), "").unwrap();
+        let mut dirs = watch_dirs(&repo);
+        let _ = fs::remove_dir_all(&repo);
+        dirs.sort();
+        let heads = repo.join(".git/refs/heads");
+        assert_eq!(dirs, [repo.join(".git"), heads.clone(), heads.join("feat"), heads.join("feat/deep"), heads.join("fix")]);
     }
 
     #[test]
