@@ -48,6 +48,9 @@ l() {
 }
 ```
 
+With `restore: true` in `host.ron`, shop reopens the tabs it had when it last quit (kept in
+`~/.local/state/shop/session`); the tab that had focus opens where you started shop, or in `DIR`.
+
 `--bench` prints the time to the first complete frame and exits.
 
 ## The git tab

@@ -59,7 +59,8 @@ lazi lives in `crates/lazi/src/`:
 wrapper relies on), the event loop, and one panel at a time. Panels: lazi (via `lazi::Lazi` in
 `crates/lazi/src/lib.rs`) and git (`git.rs`: repos found under configured roots, down to `depth` levels, with zhimmer's
 status symbols, a worker thread for `git status`/`git fetch`, inotify on each `.git`;
-`status.rs` holds the pure parser and discovery the tests cover). Its config is `host.ron`
+`status.rs` holds the pure parser and discovery the tests cover). `session.rs` saves the tabs
+on exit and lays them out again on start (`restore` in `host.ron`). Its config is `host.ron`
 (`crates/shop/host.ron` is the reference). Keys go to shop's sequence map first and fall
 through to the focused panel when nothing there starts with them, so shop's bindings live
 on keys the panels don't use (the number keys, `Ctrl+c`), and stand aside entirely while a

@@ -13,6 +13,8 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub panels: Vec<PanelSpec>,
+    /// Reopen the tabs shop had when it last quit.
+    pub restore: bool,
     pub style: Styles,
     /// Whatever no binding here claims goes to the focused panel.
     #[serde(deserialize_with = "lazi::sequences")]
@@ -33,7 +35,7 @@ pub enum HelpAction {
     Close,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub enum PanelSpec {
     /// `config: None` is lazi's usual lookup; `dir: None` is shop's working directory.
     Lazi { config: Option<PathBuf>, dir: Option<PathBuf> },

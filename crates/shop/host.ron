@@ -6,6 +6,9 @@
     //   directory. lazi's config is per process, so a second Lazi panel uses the first's.
     //   Git(roots, depth, fetch_every, symbols, style, keys): repos found under each root, with
     //   zhimmer's status symbols. Keys are the panel's own; Run's $1 is the repo's path.
+    // Reopen the tabs shop had when it last quit (saved in ~/.local/state/shop/session). The tab
+    // that had focus opens where shop is started, or in DIR.
+    restore: true,
     panels: [
         Lazi(config: None, dir: None),
         Git(

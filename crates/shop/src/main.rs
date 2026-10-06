@@ -5,6 +5,7 @@
 mod config;
 mod git;
 mod panel;
+mod session;
 mod status;
 
 use std::collections::BTreeMap;
@@ -84,20 +85,34 @@ fn main() {
 /// normal screen. `dir` overrides where the first lazi panel starts; `cwd_file` gets where it
 /// ended, for a shell wrapper to cd into.
 fn launch(config: Option<PathBuf>, dir: Option<PathBuf>, cwd_file: Option<PathBuf>, bench: Option<Instant>) -> Result<(), String> {
-    let mut config = config::load(config)?;
-    if let Some(dir) = dir
-        && let Some(PanelSpec::Lazi { dir: start, .. }) = config.panels.iter_mut().find(|p| matches!(p, PanelSpec::Lazi { .. }))
-    {
-        *start = Some(dir);
-    }
-    let panels = config.panels.iter().map(Panel::new).collect::<Result<Vec<_>, _>>()?;
-    let mut shop = Shop { config, panels, focus: 0, pending: Vec::new(), help: None, help_page: 0 };
+    let config = config::load(config)?;
+    // Where the focused file-browser tab opens: DIR, else the config's, else where shop was run.
+    let configured = config.panels.iter().find_map(|p| match p {
+        PanelSpec::Lazi { dir, .. } => dir.clone(),
+        PanelSpec::Git(_) => None,
+    });
+    let here = match dir.or(configured) {
+        Some(dir) => dir,
+        None => env::current_dir().map_err(|e| e.to_string())?,
+    };
+    let saved = if config.restore { session::load() } else { None };
+    let (specs, focus) = session::layout(saved, &config.panels, here, Path::is_dir);
+    let panels = specs.iter().map(Panel::new).collect::<Result<Vec<_>, _>>()?;
+    let mut shop = Shop { config, panels, focus, pending: Vec::new(), help: None, help_page: 0 };
     let mut term = ratatui::init();
     let res = run(&mut term, &mut shop, bench);
     for panel in &mut shop.panels {
         let _ = panel.clear_images(term.backend_mut());
     }
     ratatui::restore();
+
+    if shop.config.restore
+        && !matches!(res, Ok(Exit::Bench(_)))
+        && let Err(e) = session::save(&shop.session())
+    {
+        // The tabs just aren't restored next time; nothing else depends on it.
+        eprintln!("shop: saving tabs: {e}");
+    }
 
     // The cwd file gets the tab shop was left on, or the first lazi tab when that was git.
     let lazi = shop.panels.get(shop.focus).and_then(Panel::lazi).or_else(|| shop.panels.iter().find_map(Panel::lazi));
@@ -226,6 +241,21 @@ fn handle(term: &mut DefaultTerminal, shop: &mut Shop, key: Key) -> io::Result<O
     };
     focus(term, shop, next)?;
     Ok(None)
+}
+
+impl Shop {
+    /// The open tabs, for the next start.
+    fn session(&self) -> session::Session {
+        let tabs = self
+            .panels
+            .iter()
+            .map(|p| match p.lazi() {
+                Some(lazi) => session::Tab::Lazi(lazi.cwd().to_path_buf()),
+                None => session::Tab::Other(p.name().to_owned()),
+            })
+            .collect();
+        session::Session { tabs, focus: self.focus }
+    }
 }
 
 /// Does what a panel's key asked of shop.
