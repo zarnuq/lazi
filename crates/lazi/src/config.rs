@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use std::{env, fs};
 
-use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use ron::extensions::Extensions;
@@ -344,7 +344,7 @@ pub fn get() -> &'static Config {
 pub fn load(path: Option<PathBuf>) -> Result<(), String> {
     let path = match path {
         Some(path) => path,
-        None => find()?,
+        None => find("lazi/config.ron", "lazi's source has an example config.ron.")?,
     };
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     // So `fg: "blue"` needn't be `fg: Some("blue")`.
@@ -360,16 +360,17 @@ pub fn load(path: Option<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
-fn find() -> Result<PathBuf, String> {
+/// The first of $XDG_CONFIG_HOME/`file` and $XDG_CONFIG_DIRS/`file` that exists; `hint` ends
+/// the error when none does.
+pub fn find(file: &str, hint: &str) -> Result<PathBuf, String> {
     let home = env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".config"));
     let dirs = env::var("XDG_CONFIG_DIRS").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| "/etc/xdg".into());
-    let candidates: Vec<PathBuf> =
-        [home].into_iter().chain(dirs.split(':').map(PathBuf::from)).map(|dir| dir.join("lazi/config.ron")).collect();
+    let candidates: Vec<PathBuf> = [home].into_iter().chain(dirs.split(':').map(PathBuf::from)).map(|dir| dir.join(file)).collect();
     candidates.iter().find(|path| path.is_file()).cloned().ok_or_else(|| {
         let tried: Vec<_> = candidates.iter().map(|p| p.display().to_string()).collect();
-        format!("no config file; tried {}. lazi's source has an example config.ron.", tried.join(", "))
+        format!("no config file; tried {}. {hint}", tried.join(", "))
     })
 }
 
@@ -391,7 +392,8 @@ struct StyleSpec {
     reversed: bool,
 }
 
-fn style<'de, D: Deserializer<'de>>(d: D) -> Result<Style, D::Error> {
+/// A serde `deserialize_with` helper for a `(fg: …, bold: …)` style; shop's config uses it too.
+pub fn style<'de, D: Deserializer<'de>>(d: D) -> Result<Style, D::Error> {
     let spec = StyleSpec::deserialize(d)?;
     let color = |name: &str| name.parse::<Color>().map_err(|_| D::Error::custom(format!("unknown colour \"{name}\"")));
     let mut style = Style::new();
@@ -418,8 +420,9 @@ fn style<'de, D: Deserializer<'de>>(d: D) -> Result<Style, D::Error> {
 pub type Key = (KeyCode, KeyModifiers);
 
 /// A keymap whose bindings may be sequences. A binding that starts a longer one would make the
-/// longer one unreachable, so that's an error rather than a surprise.
-fn sequences<'de, D: Deserializer<'de>, A: Deserialize<'de>>(d: D) -> Result<Vec<(Vec<Key>, A)>, D::Error> {
+/// longer one unreachable, so that's an error rather than a surprise. A serde
+/// `deserialize_with` helper; shop's config uses it too.
+pub fn sequences<'de, D: Deserializer<'de>, A: Deserialize<'de>>(d: D) -> Result<Vec<(Vec<Key>, A)>, D::Error> {
     let raw = HashMap::<String, A>::deserialize(d)?;
     let mut map = Vec::new();
     for (name, action) in raw {
@@ -524,20 +527,32 @@ fn named(name: &str) -> Option<KeyCode> {
     })
 }
 
-pub enum Lookup {
-    Action(&'static Action),
+pub enum Lookup<'a, A> {
+    Action(&'a A),
     /// `keys` starts a longer binding; wait for the next key.
     Pending,
     Unbound,
 }
 
-pub fn lookup(keys: &[Key]) -> Lookup {
+/// Finds what `keys`, typed so far, mean in a keymap read with `sequences`.
+pub fn lookup<'a, A>(bound: &'a [(Vec<Key>, A)], keys: &[Key]) -> Lookup<'a, A> {
     let mut prefix = false;
-    for (bound, action) in &get().keys.normal {
-        if *bound == keys {
+    for (seq, action) in bound {
+        if *seq == keys {
             return Lookup::Action(action);
         }
-        prefix |= bound.starts_with(keys);
+        prefix |= seq.starts_with(keys);
     }
     if prefix { Lookup::Pending } else { Lookup::Unbound }
+}
+
+/// Turns a key event into the form bindings are parsed into.
+pub fn normalize(key: KeyEvent) -> Key {
+    let mut mods = key.modifiers;
+    // A char already says whether shift was held, so 'G' binds as 'G', not shift+'G'. BackTab
+    // likewise is already shift+Tab.
+    if let KeyCode::Char(_) | KeyCode::BackTab = key.code {
+        mods.remove(KeyModifiers::SHIFT);
+    }
+    (key.code, mods)
 }

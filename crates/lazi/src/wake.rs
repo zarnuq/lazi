@@ -1,7 +1,9 @@
 //! Sleeping until something needs attention: a key, a worker thread, a filesystem change, a resize.
 
+use std::fs::File;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 
 /// An eventfd that worker threads poke to wake the main loop out of `wait`.
@@ -54,4 +56,23 @@ pub fn drain(fd: RawFd) -> bool {
         any = true;
     }
     any
+}
+
+/// The fd crossterm reads keys from, so `wait` sleeps on the same one: stdin if it's a
+/// terminal, else /dev/tty. The File, if any, must stay alive as long as the fd is used.
+pub fn tty() -> io::Result<(RawFd, Option<File>)> {
+    // SAFETY: isatty has no preconditions.
+    if unsafe { libc::isatty(0) } == 1 {
+        return Ok((0, None));
+    }
+    let file = File::open("/dev/tty")?;
+    Ok((file.as_raw_fd(), Some(file)))
+}
+
+/// A socket that turns readable on SIGWINCH, so a resize wakes `wait`. `drain` it after.
+pub fn winch() -> io::Result<UnixStream> {
+    let (winch, tx) = UnixStream::pair()?;
+    winch.set_nonblocking(true)?;
+    signal_hook::low_level::pipe::register(signal_hook::consts::SIGWINCH, tx)?;
+    Ok(winch)
 }

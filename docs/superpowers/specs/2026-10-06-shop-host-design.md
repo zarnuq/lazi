@@ -83,8 +83,9 @@ Supporting changes inside lazi:
   `lookup<'a, A>(bound: &'a [(Vec<Key>, A)], keys: &[Key]) -> Lookup<'a, A>`. lazi passes
   `&get().keys.normal`; shop passes its own map.
 - `config::sequences` (the serde helper that parses `"Ctrl+x Ctrl+s"`) becomes public, so
-  shop's config parses keys exactly as lazi's does. These two, `Key` and `Lookup`, are
-  re-exported as `lazi::keys`.
+  shop's config parses keys exactly as lazi's does. They, `style`, `find`, `normalize`, `Key` and
+  `Lookup` are re-exported at the crate root (`lazi::lookup`, …), and `lazi::wake` is public
+  with `tty()` and `winch()` added so both binaries share the tty and resize setup.
 - The standalone `lazi` binary keeps `--bench`, `--cwd-file` and `--config`, and behaves
   exactly as before.
 
