@@ -5,6 +5,7 @@
 mod config;
 mod dashboard;
 mod git;
+mod magit;
 mod panel;
 mod search;
 mod session;

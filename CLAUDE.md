@@ -60,7 +60,8 @@ The file browser lives in `crates/files/src/`:
 wrapper relies on), the event loop, and one panel at a time. Panels: files (via `files::Files` in
 `crates/files/src/lib.rs`) and git (`git.rs`: repos found under configured roots, down to `depth` levels, with zhimmer's
 status symbols, a worker thread for `git status`/`git fetch`, inotify on each `.git`;
-`status.rs` holds the pure parser and discovery the tests cover). `dashboard.rs` is the home tab: configured shortcuts above the recently opened files
+`status.rs` holds the pure parsers and discovery the tests cover; `magit.rs` is the repo
+status view git's `Status` action opens, which asks the git panel to run git through `Step`). `dashboard.rs` is the home tab: configured shortcuts above the recently opened files
 (files reports what its openers opened through `Files::take_opened`). `session.rs` saves the tabs
 on exit and lays them out again on start (`restore` in `config.ron`), and keeps the visited-folder
 and opened-file lists. `search.rs` is the Ctrl+p popup: pure query/regex/rg-parsing helpers (tested), plus fd

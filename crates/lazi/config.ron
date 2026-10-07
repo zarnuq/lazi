@@ -58,6 +58,10 @@
                 error: (fg: "#f38ba8"),
                 // A background, not reversed: reversing turns every coloured span into a block.
                 cursor: (bg: "#45475a"),
+                // Diff lines in the status view.
+                added: (fg: "#a6e3a1"),
+                removed: (fg: "#f38ba8"),
+                hunk: (fg: "#89b4fa"),
             ),
             keys: {
                 "j": Down, "k": Up, "Down": Down, "Up": Up, "g g": Top, "G": Bottom,
@@ -65,13 +69,34 @@
                 "r": Refresh,
                 "?": Help,
                 "g l": Run(run: "lazygit", block: true),
-                // Everything uncommitted, staged or not, in git's pager; q comes back.
-                "d": Run(run: "git diff HEAD", block: true),
+                // The repo's status, like magit's: stage, unstage, discard and diff file by file.
+                "d": Status,
                 "p": Run(run: "git pull --ff-only", block: true),
                 "P": Run(run: "git push", block: true),
                 "t": Run(run: r#"kitty --directory "$1""#, block: false),
                 "c": Run(run: r#"kitty --directory "$1" claude"#, block: false),
                 "x": Run(run: r#"kitty --directory "$1" codex"#, block: false),
+            },
+            // In the status view. Run's $1 is the repo and $2 the file under the cursor; staging
+            // and commits made by a detached Run show up by themselves.
+            status_keys: {
+                "j": Down, "k": Up, "Down": Down, "Up": Up, "g g": Top, "G": Bottom,
+                "Tab": Toggle,
+                "s": Stage, "u": Unstage,
+                // Asks for x again before throwing anything away.
+                "x": Discard,
+                "Enter": Open,
+                "r": Refresh,
+                "q": Close, "Esc": Close, "h": Close,
+                "?": Help,
+                "S": Run(run: "git add -A", block: false),
+                "U": Run(run: "git reset -q", block: false),
+                "c": Run(run: "git commit", block: true),
+                "A": Run(run: "git commit --amend", block: true),
+                // Everything uncommitted, staged or not, in git's pager; q comes back.
+                "d": Run(run: "git diff HEAD", block: true),
+                "p": Run(run: "git pull --ff-only", block: true),
+                "P": Run(run: "git push", block: true),
             },
         ),
     ],

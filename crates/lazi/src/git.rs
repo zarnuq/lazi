@@ -20,8 +20,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::config::{GitAction, GitSpec, GitStyles, GitSymbols};
-use crate::status::{self, Status};
+use crate::config::{GitAction, GitSpec, GitStyles, GitSymbols, StatusAction};
+use crate::magit::{self, Magit, Step};
+use crate::status::{self, Change, Section, Status};
 
 /// A status is local and takes milliseconds; one this slow is stuck (a dead network mount).
 const STATUS_LIMIT: Duration = Duration::from_secs(10);
@@ -33,6 +34,11 @@ const FETCH_LIMIT: Duration = Duration::from_secs(60);
 enum Job {
     Status(Vec<PathBuf>),
     Fetch(Vec<PathBuf>),
+    /// The status view's file list and last commit.
+    Changes(PathBuf),
+    Diff(PathBuf, Change),
+    /// git with these arguments, then `Changes`.
+    Exec(PathBuf, Vec<String>),
 }
 
 /// What comes back from the worker, the fetch threads, the ticker and detached commands.
@@ -43,6 +49,8 @@ enum Msg {
     Failed(PathBuf, String),
     /// Time for a fetch round.
     Tick,
+    Changes(PathBuf, Result<(Vec<Change>, String), String>),
+    Diff(PathBuf, Section, String, Vec<String>),
 }
 
 /// Sends to the panel and wakes the main loop, which may be asleep in `wake::wait`.
@@ -97,6 +105,8 @@ pub struct Git {
     watcher: Option<Watcher>,
     /// Local time the last fetch round finished, as HH:MM.
     fetched: Option<String>,
+    /// A repo's status view, while it's open in place of the list.
+    view: Option<Magit>,
 }
 
 impl Git {
@@ -129,6 +139,7 @@ impl Git {
             notify,
             watcher: Watcher::new(),
             fetched: None,
+            view: None,
         };
         git.refresh();
         Ok(git)
@@ -148,7 +159,13 @@ impl Git {
         let changed = watcher.changed();
         if !changed.is_empty() {
             // Each repo's watched directories lie under it.
-            let repos = self.all().into_iter().filter(|repo| changed.iter().any(|dir| dir.starts_with(repo))).collect();
+            let repos: Vec<PathBuf> = self.all().into_iter().filter(|repo| changed.iter().any(|dir| dir.starts_with(repo))).collect();
+            // A stage, a commit or a checkout, here or elsewhere, changes what the view lists.
+            if let Some(view) = &self.view
+                && repos.contains(&view.repo)
+            {
+                let _ = self.jobs.send(Job::Changes(view.repo.clone()));
+            }
             self.status(repos);
             // A new branch like `feat/y` may have made a directory nothing watches yet.
             self.watch();
@@ -184,6 +201,22 @@ impl Git {
                     }
                 }
                 Msg::Tick => self.fetch(self.all()),
+                Msg::Changes(path, result) => {
+                    let Some(view) = self.view.as_mut().filter(|v| v.repo == path) else { continue };
+                    match result {
+                        Ok((changes, last)) => {
+                            for change in view.set_changes(changes, last) {
+                                let _ = self.jobs.send(Job::Diff(path.clone(), change));
+                            }
+                        }
+                        Err(e) => view.note = Some(e),
+                    }
+                }
+                Msg::Diff(path, section, file, lines) => {
+                    if let Some(view) = self.view.as_mut().filter(|v| v.repo == path) {
+                        view.set_diff(section, file, lines);
+                    }
+                }
             }
         }
         any
@@ -193,11 +226,17 @@ impl Git {
     /// moment to look again.
     pub fn show(&mut self) {
         self.status(self.all());
+        if let Some(view) = &self.view {
+            let _ = self.jobs.send(Job::Changes(view.repo.clone()));
+        }
     }
 
     pub fn key(&mut self, term: &mut DefaultTerminal, key: Key) -> io::Result<Outcome> {
         for repo in self.repos.values_mut() {
             repo.run_error = None;
+        }
+        if self.view.is_some() {
+            return self.view_key(term, key);
         }
         self.pending.push(key);
         let action = match files::lookup(&self.spec.keys, &self.pending) {
@@ -218,6 +257,12 @@ impl Git {
             GitAction::Bottom => self.cursor = last,
             GitAction::Refresh => self.refresh(),
             GitAction::Help => return Ok(Outcome::Help),
+            GitAction::Status => {
+                if let Some(path) = all.get(self.cursor) {
+                    self.view = Some(Magit::new(path.clone()));
+                    let _ = self.jobs.send(Job::Changes(path.clone()));
+                }
+            }
             GitAction::Open => {
                 if let Some(path) = all.get(self.cursor) {
                     return Ok(Outcome::Open(path.clone()));
@@ -255,14 +300,73 @@ impl Git {
         self.all().get(self.cursor).cloned()
     }
 
-    /// Every binding, as (keys, action), for the help menu.
+    /// A key in the status view.
+    fn view_key(&mut self, term: &mut DefaultTerminal, key: Key) -> io::Result<Outcome> {
+        self.pending.push(key);
+        let action: StatusAction = match files::lookup(&self.spec.status_keys, &self.pending) {
+            Lookup::Pending => return Ok(Outcome::Continue),
+            Lookup::Unbound => {
+                self.pending.clear();
+                return Ok(Outcome::Continue);
+            }
+            Lookup::Action(action) => action.clone(),
+        };
+        self.pending.clear();
+        let Some(view) = &mut self.view else { return Ok(Outcome::Continue) };
+        let repo = view.repo.clone();
+        match view.key(&action) {
+            Step::Nothing => {}
+            Step::Reload => {
+                let _ = self.jobs.send(Job::Changes(repo));
+            }
+            Step::Diff(change) => {
+                let _ = self.jobs.send(Job::Diff(repo, change));
+            }
+            Step::Exec(args) => {
+                let _ = self.jobs.send(Job::Exec(repo, args));
+            }
+            Step::Edit(file) => return Ok(Outcome::Edit(file)),
+            Step::Help => return Ok(Outcome::Help),
+            Step::Close => {
+                self.view = None;
+                // Whatever was staged or committed in there changed the row.
+                self.status(vec![repo]);
+            }
+            Step::Run { run, block, file } => {
+                let notify = self.notify.clone();
+                let failed = repo.clone();
+                let on_fail = Box::new(move |msg| {
+                    notify.send(Msg::Failed(failed, msg));
+                });
+                let args = [repo.clone(), file.unwrap_or_default()];
+                let err = files::run(term, &Cmd { desc: &run, script: &run, args: &args, block }, &repo, on_fail)?;
+                if let Some(r) = self.repos.get_mut(&repo) {
+                    r.run_error = err;
+                }
+                if block {
+                    // A commit, a push: the files and the head may both have changed.
+                    let _ = self.jobs.send(Job::Changes(repo.clone()));
+                    self.status(vec![repo]);
+                }
+            }
+        }
+        Ok(Outcome::Continue)
+    }
+
+    /// Every binding, as (keys, action), for the help menu: the status view's while it's open.
     pub fn help(&self) -> Vec<(String, String)> {
+        if self.view.is_some() {
+            return self.spec.status_keys.iter().map(|(keys, action)| (files::key_label(keys), format!("{action:?}"))).collect();
+        }
         self.spec.keys.iter().map(|(keys, action)| (files::key_label(keys), format!("{action:?}"))).collect()
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect) {
         if area.height < 2 {
             return;
+        }
+        if self.view.is_some() {
+            return self.draw_view(frame, area);
         }
         let list = Rect { height: area.height - 1, ..area };
         // The name column, wide enough for the longest indented name.
@@ -333,6 +437,35 @@ impl Git {
 
         let (text, line_style) = self.status_line();
         buf.set_stringn(area.x, area.bottom() - 1, text, area.width as usize, line_style);
+    }
+
+    /// The status view, with the repo's head on top and its counts, or an error, below.
+    fn draw_view(&mut self, frame: &mut Frame, area: Rect) {
+        let Some(view) = &mut self.view else { return };
+        let style = &self.spec.style;
+        let repo = self.repos.get(&view.repo);
+        let mut head = vec![Span::styled("Head:     ", style.root)];
+        if let Some(Some(Ok(s))) = repo.map(|r| r.status.as_ref()) {
+            head.push(Span::styled(format!("{}  ", s.branch), style.branch));
+            let (ahead, behind) = s.ahead_behind.unwrap_or((0, 0));
+            let mut arrows = String::new();
+            if ahead > 0 {
+                arrows.push_str(&format!("{}{ahead} ", self.spec.symbols.ahead));
+            }
+            if behind > 0 {
+                arrows.push_str(&format!("{}{behind} ", self.spec.symbols.behind));
+            }
+            head.push(Span::styled(arrows, style.arrows));
+        }
+        head.push(Span::raw(view.last.clone()));
+        let body = Rect { height: area.height - 1, ..area };
+        view.draw(frame.buffer_mut(), body, style, Line::from(head));
+        let (text, line_style) = match (repo.and_then(|r| r.run_error.as_ref()), &view.note) {
+            (Some(err), _) => (err.clone(), style.error),
+            (None, Some(note)) => (note.clone(), style.status),
+            (None, None) => (format!("{} · {}", view.summary(), crate::search::tilde(&view.repo)), Style::new()),
+        };
+        frame.buffer_mut().set_stringn(area.x, area.bottom() - 1, text, area.width as usize, line_style);
     }
 
     /// One repo's row: name, branch, symbols, and fetch state.
@@ -499,6 +632,26 @@ fn worker(jobs: Receiver<Job>, notify: Notifier) {
                     }
                 }
             }
+            Job::Changes(repo) => {
+                if !notify.send(Msg::Changes(repo.clone(), changes(&repo))) {
+                    return;
+                }
+            }
+            Job::Exec(repo, args) => {
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                if let Err(e) = git(&repo, &args, STATUS_LIMIT) {
+                    notify.send(Msg::Failed(repo.clone(), e));
+                }
+                if !notify.send(Msg::Changes(repo.clone(), changes(&repo))) {
+                    return;
+                }
+            }
+            Job::Diff(repo, change) => {
+                let lines = diff(&repo, &change).unwrap_or_else(|e| vec![e]);
+                if !notify.send(Msg::Diff(repo, change.section, change.path, lines)) {
+                    return;
+                }
+            }
             Job::Fetch(repos) => {
                 for path in repos {
                     let notify = notify.clone();
@@ -510,6 +663,36 @@ fn worker(jobs: Receiver<Job>, notify: Notifier) {
             }
         }
     }
+}
+
+/// The status view's files, every untracked one listed rather than its folder, and the last
+/// commit (none in a new repo).
+fn changes(repo: &Path) -> Result<(Vec<Change>, String), String> {
+    let out = git(repo, &["status", "--porcelain=v2", "-z", "--untracked-files=all"], STATUS_LIMIT)?;
+    let last = git(repo, &["log", "-1", "--format=%h %s"], STATUS_LIMIT).unwrap_or_default();
+    Ok((status::changes(&out), last.trim_end().to_owned()))
+}
+
+/// Most of a diff anyone reads in place; past this, open it elsewhere.
+const DIFF_LINES: usize = 1000;
+
+/// A change's diff, from the first hunk. An untracked file has none, so it's the file itself,
+/// every line added.
+fn diff(repo: &Path, change: &Change) -> Result<Vec<String>, String> {
+    let mut lines = match change.section {
+        Section::Untracked => {
+            let mut bytes = Vec::new();
+            std::fs::File::open(repo.join(&change.path)).and_then(|f| f.take(64 * 1024).read_to_end(&mut bytes)).map_err(|e| e.to_string())?;
+            if bytes.contains(&0) {
+                return Ok(vec!["binary".into()]);
+            }
+            String::from_utf8_lossy(&bytes).lines().map(|l| format!("+{}", l.replace('\t', "    "))).collect()
+        }
+        Section::Unstaged => magit::hunks(&git(repo, &["diff", "--no-color", "--no-ext-diff", "--", &change.path], STATUS_LIMIT)?),
+        Section::Staged => magit::hunks(&git(repo, &["diff", "--cached", "--no-color", "--no-ext-diff", "--", &change.path], STATUS_LIMIT)?),
+    };
+    lines.truncate(DIFF_LINES);
+    Ok(lines)
 }
 
 /// Runs git in `repo`: its stdout, or its last stderr line.

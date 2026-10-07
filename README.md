@@ -78,6 +78,11 @@ the keys. `Enter` opens a repo in the file browser; `Run` bindings run a command
 its path as `$1`, either taking over the terminal (`git pull`, lazygit) or in the background (a
 new terminal window). Status updates as soon as a commit, checkout or pull happens elsewhere.
 
+`d` opens a repo's status, like magit's: the branch and last commit, then its untracked, unstaged
+and staged files. `Tab` shows a file's diff under it, `s`/`u` stage and unstage it, `x` twice
+discards it (or deletes it, if untracked), `S`/`U` stage or unstage everything, `c` commits, `A`
+amends, and `q` goes back to the list. It refreshes by itself when the index changes.
+
 ## Configuration
 
 lazi reads the first of `$XDG_CONFIG_HOME/lazi/config.ron` (usually
@@ -189,7 +194,7 @@ lazi's own, from the example `config.ron`, work on every tab except while a prom
 The home tab: `j`/`k` move, `Enter` runs a menu item or opens a file or folder, `^r` shows a
 file or folder in the file browser, and each menu item has its own key (`p` projects, `s`
 search, `h` home, `c`/`L` the configs). The git tab: `j`/`k` move, `Enter` opens the repo in
-the file browser, `r` refreshes, `d` diff, `p`/`P` pull/push, `g l` lazygit, `t` a terminal,
+the file browser, `r` refreshes, `d` the status view, `p`/`P` pull/push, `g l` lazygit, `t` a terminal,
 `c`/`x` claude/codex there.
 
 The file browser's, from the example `files.ron`:
