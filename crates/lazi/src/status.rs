@@ -138,9 +138,90 @@ pub fn watch_dirs(repo: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// Where a change sits in the status view, in magit's order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Section {
+    Untracked,
+    Unstaged,
+    Staged,
+}
+
+/// One file in one section; a file both staged and edited since is in two.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Change {
+    pub section: Section,
+    /// git's letter: M, A, D, R, C, T, U (unmerged), or ? for untracked.
+    pub code: char,
+    /// Relative to the repo's top.
+    pub path: String,
+}
+
+/// The files `git status --porcelain=v2 -z --untracked-files=all` lists, sorted by section
+/// then path. -z keeps names with spaces or quotes as they are, and puts a renamed file's old
+/// name in a field of its own, which is skipped.
+pub fn changes(text: &str) -> Vec<Change> {
+    let mut out = Vec::new();
+    let mut fields = text.split('\0');
+    while let Some(entry) = fields.next() {
+        let (xy, path) = match entry.as_bytes().first() {
+            Some(b'1') => (entry.split(' ').nth(1), entry.splitn(9, ' ').nth(8)),
+            Some(b'2') => {
+                fields.next();
+                (entry.split(' ').nth(1), entry.splitn(10, ' ').nth(9))
+            }
+            // Unmerged: both sides changed it; it's resolved by staging.
+            Some(b'u') => {
+                if let Some(path) = entry.splitn(11, ' ').nth(10) {
+                    out.push(Change { section: Section::Unstaged, code: 'U', path: path.to_owned() });
+                }
+                continue;
+            }
+            Some(b'?') => {
+                out.push(Change { section: Section::Untracked, code: '?', path: entry[2..].to_owned() });
+                continue;
+            }
+            _ => continue,
+        };
+        let (Some(xy), Some(path)) = (xy, path) else { continue };
+        let mut xy = xy.chars();
+        let (x, y) = (xy.next().unwrap_or('.'), xy.next().unwrap_or('.'));
+        if x != '.' {
+            out.push(Change { section: Section::Staged, code: x, path: path.to_owned() });
+        }
+        if y != '.' {
+            out.push(Change { section: Section::Unstaged, code: y, path: path.to_owned() });
+        }
+    }
+    out.sort_by(|a, b| (a.section, &a.path).cmp(&(b.section, &b.path)));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changes_split_into_sections_by_xy() {
+        let text = "# branch.oid abc\0# branch.head main\0\
+1 MM N... 100644 100644 100644 h1 h2 src/a b.rs\0\
+1 .D N... 100644 100644 000000 h1 h1 gone.rs\0\
+2 R. N... 100644 100644 100644 h1 h1 R100 new.rs\0old.rs\0\
+u UU N... 100644 100644 100644 100644 h1 h2 h3 both.rs\0\
+? notes/x.md\0";
+        let all = changes(text);
+        let got: Vec<(Section, char, &str)> = all.iter().map(|c| (c.section, c.code, c.path.as_str())).collect();
+        assert_eq!(
+            got,
+            [
+                (Section::Untracked, '?', "notes/x.md"),
+                (Section::Unstaged, 'U', "both.rs"),
+                (Section::Unstaged, 'D', "gone.rs"),
+                (Section::Unstaged, 'M', "src/a b.rs"),
+                (Section::Staged, 'R', "new.rs"),
+                (Section::Staged, 'M', "src/a b.rs"),
+            ]
+        );
+    }
 
     #[test]
     fn clean_branch_with_upstream() {

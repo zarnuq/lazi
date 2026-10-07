@@ -166,6 +166,9 @@ pub struct GitSpec {
     pub style: GitStyles,
     #[serde(deserialize_with = "files::sequences")]
     pub keys: Vec<(Vec<Key>, GitAction)>,
+    /// Keys in a repo's status view (GitAction::Status).
+    #[serde(deserialize_with = "files::sequences")]
+    pub status_keys: Vec<(Vec<Key>, StatusAction)>,
 }
 
 /// A folder the git panel tracks repos in.
@@ -210,6 +213,13 @@ pub struct GitStyles {
     pub error: Style,
     #[serde(deserialize_with = "files::style")]
     pub cursor: Style,
+    /// Diff lines in the status view.
+    #[serde(deserialize_with = "files::style")]
+    pub added: Style,
+    #[serde(deserialize_with = "files::style")]
+    pub removed: Style,
+    #[serde(deserialize_with = "files::style")]
+    pub hunk: Style,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -227,6 +237,33 @@ pub enum GitAction {
     Run { run: String, block: bool },
     /// Show the key bindings.
     Help,
+    /// The repo's status view, like magit's: untracked, unstaged and staged files, to stage,
+    /// unstage, discard and diff one at a time.
+    Status,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub enum StatusAction {
+    Down,
+    Up,
+    Top,
+    Bottom,
+    /// Show or hide the file's diff under it.
+    Toggle,
+    Stage,
+    Unstage,
+    /// Throw away the file's unstaged changes, or delete it if untracked. Asks for the same
+    /// key again first.
+    Discard,
+    /// Open the file in the editor (`search.open`).
+    Open,
+    Refresh,
+    /// Back to the repo list.
+    Close,
+    Help,
+    /// A `sh -c` snippet run in the repo, with its path as $1 and the file under the cursor as
+    /// $2: `git commit` blocking, say.
+    Run { run: String, block: bool },
 }
 
 #[derive(Deserialize)]
