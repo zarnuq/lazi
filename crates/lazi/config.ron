@@ -4,7 +4,7 @@
     // Panels in tab order; the first has focus at start.
     //   Files(config, dir): the file browser. config None reads lazi/files.ron as usual, dir None is
     //   lazi's working directory. Its config is per process, so a second Files panel uses the first's.
-    //   Git(roots, depth, fetch_every, symbols, style, keys): repos found under each root, with
+    //   Git(roots, fetch_every, symbols, style, keys): repos found under each root, with
     //   zhimmer's status symbols. Keys are the panel's own; Run's $1 is the repo's path.
     // Reopen the tabs lazi had when it last quit (saved in ~/.local/state/lazi/session). Tab 1
     // always opens where lazi is started, or in DIR; the other files tabs keep their folders until
@@ -36,10 +36,13 @@
             },
         ),
         Git(
-            roots: ["~"],
-            // Levels below each root to search; 2 finds ~/Projects/x but not repos kept deeper
-            // (notes, downloads of downloads). Hidden directories and repos inside repos are skipped.
-            depth: 2,
+            // Folders to track, each searched `depth` levels down: 2 finds ~/Projects/x but not
+            // repos kept deeper (notes, downloads of downloads). Hidden directories and repos inside
+            // repos are skipped. Depth 0 tracks the folder itself, for one repo kept deeper. To track
+            // only some folders: [(path: "~/Projects", depth: 1), (path: "~/CCSO", depth: 1)].
+            roots: [
+                (path: "~", depth: 2),
+            ],
             // Seconds between background fetch rounds.
             fetch_every: 300,
             symbols: (

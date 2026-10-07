@@ -1,4 +1,4 @@
-//! The git panel: every repository directly under the configured roots, with the status
+//! The git panel: every repository found under the configured roots, with the status
 //! symbols the zhimmer prompt shows, kept current by a worker thread, a ticker thread and
 //! inotify on each repo's `.git`.
 
@@ -403,11 +403,11 @@ impl Git {
             .spec
             .roots
             .iter()
-            .map(|label| {
-                let path = expand(label);
+            .map(|root| {
+                let path = expand(&root.path);
                 // Only here, at startup and on Refresh: the search reads directories, so it isn't
                 // something to repeat per fetch or per frame.
-                Root { label: label.clone(), repos: status::discover(&path, self.spec.depth).ok(), path }
+                Root { label: root.path.clone(), repos: status::discover(&path, root.depth).ok(), path }
             })
             .collect();
         let all = self.all();

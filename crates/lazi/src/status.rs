@@ -82,7 +82,8 @@ fn flag(s: &mut Status, x: char, y: char) {
     }
 }
 
-/// The git repositories under `root`, down to `depth` levels (1 is its direct subdirectories),
+/// The git repositories under `root`, down to `depth` levels (1 is its direct subdirectories,
+/// 0 is `root` alone, found only if it is a repo itself),
 /// grouped by the folder they're in: the root's own first, then each folder's, both sorted
 /// case-insensitively like the files tab's listings. A repo is a directory with a `.git` entry (a
 /// directory, or a file for worktrees and submodules). The search doesn't go into a repo, so
@@ -90,6 +91,10 @@ fn flag(s: &mut Status, x: char, y: char) {
 /// `~/.local` and plugin managers keep clones nobody works in. Err only when `root` itself
 /// can't be read.
 pub fn discover(root: &Path, depth: usize) -> io::Result<Vec<PathBuf>> {
+    if depth == 0 {
+        fs::metadata(root)?;
+        return Ok(if root.join(".git").exists() { vec![root.to_path_buf()] } else { Vec::new() });
+    }
     let mut repos = Vec::new();
     let mut todo = vec![(fs::read_dir(root)?, depth)];
     while let Some((entries, depth)) = todo.pop() {
@@ -242,6 +247,19 @@ mod tests {
         // Grouped by folder for the panel's headers: repos right in the root first, then each
         // folder's, both alphabetical.
         assert_eq!(found, ["dotfiles", "zeta", "Pictures/bgs", "Projects/files", "Projects/website"]);
+    }
+
+    #[test]
+    fn discover_at_depth_zero_finds_only_the_root() {
+        let root = std::env::temp_dir().join(format!("lazi-zero-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("repo/.git")).unwrap();
+        fs::create_dir_all(root.join("repo/inner/.git")).unwrap();
+        let found = discover(&root.join("repo"), 0).unwrap();
+        let plain = discover(&root, 0).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(found, [root.join("repo")]);
+        assert!(plain.is_empty());
     }
 
     #[test]

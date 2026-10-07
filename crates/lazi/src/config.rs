@@ -155,20 +155,28 @@ pub enum DashAction {
     Help,
 }
 
-/// The git panel: repos directly under `roots`, their status in zhimmer's symbols.
+/// The git panel: repos found under `roots`, their status in zhimmer's symbols.
 #[derive(Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct GitSpec {
-    /// Where to search for repos. A leading `~` is the home directory.
-    pub roots: Vec<String>,
-    /// How many levels below each root to search: 1 is its direct subdirectories.
-    pub depth: usize,
+    pub roots: Vec<GitRoot>,
     /// Seconds between background fetch rounds.
     pub fetch_every: u64,
     pub symbols: GitSymbols,
     pub style: GitStyles,
     #[serde(deserialize_with = "files::sequences")]
     pub keys: Vec<(Vec<Key>, GitAction)>,
+}
+
+/// A folder the git panel tracks repos in.
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct GitRoot {
+    /// A leading `~` is the home directory.
+    pub path: String,
+    /// How many levels below `path` to search: 1 is its direct subdirectories, and 0 tracks
+    /// `path` itself, for a repo kept too deep to search for.
+    pub depth: usize,
 }
 
 #[derive(Deserialize, Clone)]
@@ -260,11 +268,6 @@ pub fn load(path: Option<PathBuf>) -> Result<Config, String> {
             && git.fetch_every == 0
         {
             return Err(format!("{}: fetch_every must be at least 1", path.display()));
-        }
-        if let PanelSpec::Git(git) = panel
-            && git.depth == 0
-        {
-            return Err(format!("{}: depth must be at least 1", path.display()));
         }
     }
     Ok(config)
