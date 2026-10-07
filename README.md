@@ -79,7 +79,8 @@ its path as `$1`, either taking over the terminal (`git pull`, lazygit) or in th
 new terminal window). Status updates as soon as a commit, checkout or pull happens elsewhere.
 
 `d` opens a repo's status, like magit's: the branch and last commit, then its untracked, unstaged
-and staged files. `Tab` shows a file's diff under it, `s`/`u` stage and unstage it, `x` twice
+and staged files on the left and the diff of the one under the cursor on the right, numbered and
+coloured row by row like delta (`J`/`K` scroll it). `s`/`u` stage and unstage a file, `x` twice
 discards it (or deletes it, if untracked), `S`/`U` stage or unstage everything, `c` commits, `A`
 amends, and `q` goes back to the list. It refreshes by itself when the index changes.
 

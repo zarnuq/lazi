@@ -58,10 +58,12 @@
                 error: (fg: "#f38ba8"),
                 // A background, not reversed: reversing turns every coloured span into a block.
                 cursor: (bg: "#45475a"),
-                // Diff lines in the status view.
-                added: (fg: "#a6e3a1"),
-                removed: (fg: "#f38ba8"),
+                // The status view's diff: whole rows coloured for added and removed lines, as in
+                // delta.
+                added: (bg: "#1e3a29"),
+                removed: (bg: "#4a2228"),
                 hunk: (fg: "#89b4fa"),
+                line_number: (fg: "#6c7086"),
             ),
             keys: {
                 "j": Down, "k": Up, "Down": Down, "Up": Up, "g g": Top, "G": Bottom,
@@ -81,7 +83,8 @@
             // and commits made by a detached Run show up by themselves.
             status_keys: {
                 "j": Down, "k": Up, "Down": Down, "Up": Up, "g g": Top, "G": Bottom,
-                "Tab": Toggle,
+                // The diff on the right.
+                "J": Scroll(5), "K": Scroll(-5), "Ctrl+d": Scroll(20), "Ctrl+u": Scroll(-20),
                 "s": Stage, "u": Unstage,
                 // Asks for x again before throwing anything away.
                 "x": Discard,

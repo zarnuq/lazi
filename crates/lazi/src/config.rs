@@ -220,6 +220,8 @@ pub struct GitStyles {
     pub removed: Style,
     #[serde(deserialize_with = "files::style")]
     pub hunk: Style,
+    #[serde(deserialize_with = "files::style")]
+    pub line_number: Style,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -248,8 +250,8 @@ pub enum StatusAction {
     Up,
     Top,
     Bottom,
-    /// Show or hide the file's diff under it.
-    Toggle,
+    /// Move the diff by this many lines; negative goes up.
+    Scroll(isize),
     Stage,
     Unstage,
     /// Throw away the file's unstaged changes, or delete it if untracked. Asks for the same

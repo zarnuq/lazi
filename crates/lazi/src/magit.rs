@@ -1,7 +1,7 @@
-//! A repo's status view in the git tab, like magit's: the head, then untracked, unstaged and
-//! staged files, each with its diff a key away, to stage, unstage or discard one at a time.
-//! It holds what the git worker last read; running git is the git panel's job, asked for
-//! through `Step`.
+//! A repo's status view in the git tab, like magit's: the head on top, then untracked,
+//! unstaged and staged files on the left, to stage, unstage or discard one at a time, and the
+//! diff of the one under the cursor on the right. It holds what the git worker last read;
+//! running git is the git panel's job, asked for through `Step` and `wanted`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,8 +19,6 @@ pub enum Step {
     Nothing,
     /// Read the files again.
     Reload,
-    /// Read this file's diff.
-    Diff(Change),
     /// Run git with these arguments in the repo, then read the files again.
     Exec(Vec<String>),
     Edit(PathBuf),
@@ -29,15 +27,12 @@ pub enum Step {
     Close,
 }
 
-/// A line on screen.
+/// A line of the file list.
 enum Row {
-    Head,
     Blank,
     Section(Section, usize),
     /// Index into `changes`.
     File(usize),
-    /// A change's diff, line by line, or None while it's being read.
-    Diff(usize, Option<usize>),
     Clean,
 }
 
@@ -46,11 +41,13 @@ pub struct Magit {
     changes: Vec<Change>,
     /// The last commit, short id and subject; empty before the first one.
     pub last: String,
-    /// Changes whose diff is shown, with its lines once read.
-    open: HashMap<(Section, String), Option<Vec<String>>>,
-    /// Index among the rows the cursor can be on (files and their diff lines).
+    /// Diffs read since the files were, by change; None while one is being read.
+    diffs: HashMap<(Section, String), Option<Vec<String>>>,
+    /// Index into `changes`, which is in screen order.
     cursor: usize,
     offset: usize,
+    /// The diff's first row on screen.
+    scroll: usize,
     /// The change a first Discard picked; the same key again discards it.
     confirm: Option<(Section, String)>,
     /// Shown on the status line until the next key.
@@ -60,56 +57,59 @@ pub struct Magit {
 
 impl Magit {
     pub fn new(repo: PathBuf) -> Self {
-        Self { repo, changes: Vec::new(), last: String::new(), open: HashMap::new(), cursor: 0, offset: 0, confirm: None, note: None, loaded: false }
+        Self {
+            repo,
+            changes: Vec::new(),
+            last: String::new(),
+            diffs: HashMap::new(),
+            cursor: 0,
+            offset: 0,
+            scroll: 0,
+            confirm: None,
+            note: None,
+            loaded: false,
+        }
     }
 
-    /// Takes in a fresh read of the files. Returns the shown diffs to read again, since they may
-    /// have changed too.
-    pub fn set_changes(&mut self, changes: Vec<Change>, last: String) -> Vec<Change> {
+    /// Takes in a fresh read of the files, which makes every diff read so far stale.
+    pub fn set_changes(&mut self, changes: Vec<Change>, last: String) {
         self.changes = changes;
         self.last = last;
         self.loaded = true;
-        let keys: Vec<(Section, String)> = self.changes.iter().map(|c| (c.section, c.path.clone())).collect();
-        self.open.retain(|k, _| keys.contains(k));
-        let again: Vec<Change> = self.changes.iter().filter(|c| self.open.contains_key(&(c.section, c.path.clone()))).cloned().collect();
-        for change in &again {
-            self.open.insert((change.section, change.path.clone()), None);
-        }
-        again
+        self.diffs.clear();
+        self.cursor = self.cursor.min(self.changes.len().saturating_sub(1));
     }
 
     pub fn set_diff(&mut self, section: Section, path: String, lines: Vec<String>) {
-        if let Some(slot) = self.open.get_mut(&(section, path)) {
-            *slot = Some(lines);
+        self.diffs.insert((section, path), Some(lines));
+    }
+
+    /// The change under the cursor, if its diff still needs reading; marks it as asked for.
+    pub fn wanted(&mut self) -> Option<Change> {
+        let change = self.changes.get(self.cursor)?.clone();
+        let key = (change.section, change.path.clone());
+        if self.diffs.contains_key(&key) {
+            return None;
         }
+        self.diffs.insert(key, None);
+        Some(change)
     }
 
     pub fn key(&mut self, action: &StatusAction) -> Step {
         let confirm = self.confirm.take();
         self.note = None;
-        let rows = self.rows();
-        let last = rows.iter().filter(|r| selectable(r)).count().saturating_sub(1);
-        let change = self.at(&rows).map(|i| self.changes[i].clone());
+        let last = self.changes.len().saturating_sub(1);
+        let before = self.cursor;
+        let change = self.changes.get(self.cursor).cloned();
         match action {
             StatusAction::Down => self.cursor = (self.cursor + 1).min(last),
             StatusAction::Up => self.cursor = self.cursor.saturating_sub(1),
             StatusAction::Top => self.cursor = 0,
             StatusAction::Bottom => self.cursor = last,
+            StatusAction::Scroll(lines) => self.scroll = self.scroll.saturating_add_signed(*lines),
             StatusAction::Refresh => return Step::Reload,
             StatusAction::Close => return Step::Close,
             StatusAction::Help => return Step::Help,
-            StatusAction::Toggle => {
-                let Some(change) = change else { return Step::Nothing };
-                let key = (change.section, change.path.clone());
-                if self.open.remove(&key).is_none() {
-                    self.open.insert(key, None);
-                    return Step::Diff(change);
-                }
-                // The cursor may have been on a diff line that just went away.
-                if let Some(file) = self.rows().iter().filter(|r| selectable(r)).position(|r| matches!(r, Row::File(i) if self.changes[*i] == change)) {
-                    self.cursor = file;
-                }
-            }
             StatusAction::Stage => match change {
                 Some(c) if c.section != Section::Staged => return exec(&["add", "--", &c.path]),
                 Some(_) => self.note = Some("already staged".into()),
@@ -144,19 +144,14 @@ impl Magit {
                 return Step::Run { run: run.clone(), block: *block, file: change.map(|c| self.repo.join(c.path)) };
             }
         }
+        if self.cursor != before {
+            self.scroll = 0;
+        }
         Step::Nothing
     }
 
-    /// The change under the cursor.
-    fn at(&self, rows: &[Row]) -> Option<usize> {
-        match rows.iter().filter(|r| selectable(r)).nth(self.cursor)? {
-            Row::File(i) | Row::Diff(i, _) => Some(*i),
-            _ => None,
-        }
-    }
-
     fn rows(&self) -> Vec<Row> {
-        let mut rows = vec![Row::Head, Row::Blank];
+        let mut rows = Vec::new();
         if self.loaded && self.changes.is_empty() {
             rows.push(Row::Clean);
         }
@@ -165,38 +160,45 @@ impl Magit {
             if count == 0 {
                 continue;
             }
-            rows.push(Row::Section(section, count));
-            for (i, change) in self.changes.iter().enumerate().filter(|(_, c)| c.section == section) {
-                rows.push(Row::File(i));
-                match self.open.get(&(section, change.path.clone())) {
-                    Some(Some(lines)) => rows.extend((0..lines.len()).map(|l| Row::Diff(i, Some(l)))),
-                    Some(None) => rows.push(Row::Diff(i, None)),
-                    None => {}
-                }
+            if !rows.is_empty() {
+                rows.push(Row::Blank);
             }
-            rows.push(Row::Blank);
+            rows.push(Row::Section(section, count));
+            rows.extend(self.changes.iter().enumerate().filter(|(_, c)| c.section == section).map(|(i, _)| Row::File(i)));
         }
         rows
     }
 
-    /// `head` is the branch line, built by the git panel from what it knows of the repo.
+    /// `head` is the branch line, built by the git panel from what it knows of the repo. The
+    /// rest splits in two: the files on the left, the diff on the right.
     pub fn draw(&mut self, buf: &mut Buffer, area: Rect, style: &GitStyles, head: Line<'static>) {
+        if area.height < 3 {
+            return;
+        }
+        buf.set_line(area.x, area.y, &head, area.width);
+        let body = Rect { y: area.y + 2, height: area.height - 2, ..area };
+        let left = Rect { width: (body.width * 2 / 5).max(20).min(body.width), ..body };
+        let right = Rect { x: left.right() + 1, width: body.right().saturating_sub(left.right() + 1), ..body };
+        if right.width > 0 {
+            for y in body.top()..body.bottom() {
+                buf.set_string(left.right(), y, "│", style.line_number);
+            }
+        }
+
         let rows = self.rows();
-        let count = rows.iter().filter(|r| selectable(r)).count();
-        self.cursor = self.cursor.min(count.saturating_sub(1));
-        let cursor_row = rows.iter().enumerate().filter(|(_, r)| selectable(r)).nth(self.cursor).map(|(i, _)| i);
-        let height = area.height as usize;
+        let cursor_row = rows.iter().position(|r| matches!(r, Row::File(i) if *i == self.cursor));
+        let height = left.height as usize;
         if let Some(row) = cursor_row {
             if row < self.offset {
-                self.offset = row;
+                // Keep the section header above the first file in view.
+                self.offset = row.saturating_sub(1);
             } else if row >= self.offset + height {
                 self.offset = row + 1 - height;
             }
         }
         for (i, row) in rows.iter().enumerate().skip(self.offset).take(height) {
-            let y = area.y + (i - self.offset) as u16;
+            let y = left.y + (i - self.offset) as u16;
             let line = match row {
-                Row::Head => head.clone(),
                 Row::Blank => Line::default(),
                 Row::Clean => Line::from(Span::styled("Nothing to commit, working tree clean", style.clean)),
                 Row::Section(section, n) => {
@@ -212,18 +214,25 @@ impl Magit {
                     let word = if change.section == Section::Untracked { String::new() } else { format!("{:<10} ", kind(change.code)) };
                     Line::from(vec![Span::styled(format!("  {word}"), style.status), Span::raw(change.path.clone())])
                 }
-                Row::Diff(c, line) => {
-                    let change = &self.changes[*c];
-                    match (line, self.open.get(&(change.section, change.path.clone()))) {
-                        (Some(l), Some(Some(lines))) => diff_line(&lines[*l], style),
-                        _ => Line::from("    …"),
-                    }
-                }
             };
-            buf.set_line(area.x, y, &line, area.width);
+            buf.set_line(left.x, y, &line, left.width);
             if cursor_row == Some(i) {
-                buf.set_style(Rect { y, height: 1, ..area }, style.cursor);
+                buf.set_style(Rect { y, height: 1, ..left }, style.cursor);
             }
+        }
+
+        let Some(change) = self.changes.get(self.cursor) else { return };
+        let Some(Some(lines)) = self.diffs.get(&(change.section, change.path.clone())) else {
+            buf.set_string(right.x, right.y, "…", Style::new());
+            return;
+        };
+        let rows = render(&annotate(lines), right.width as usize, style);
+        // Past the end shows the last screenful rather than nothing.
+        self.scroll = self.scroll.min(rows.len().saturating_sub(right.height as usize));
+        for (i, (line, look)) in rows.iter().skip(self.scroll).take(right.height as usize).enumerate() {
+            let y = right.y + i as u16;
+            buf.set_style(Rect { y, height: 1, ..right }, *look);
+            buf.set_line(right.x, y, line, right.width);
         }
     }
 
@@ -232,10 +241,6 @@ impl Magit {
         let n = |s| self.changes.iter().filter(|c| c.section == s).count();
         format!("{} untracked · {} unstaged · {} staged", n(Section::Untracked), n(Section::Unstaged), n(Section::Staged))
     }
-}
-
-fn selectable(row: &Row) -> bool {
-    matches!(row, Row::File(_) | Row::Diff(..))
 }
 
 fn exec(args: &[&str]) -> Step {
@@ -256,23 +261,86 @@ fn kind(code: char) -> &'static str {
     }
 }
 
-fn diff_line(text: &str, style: &GitStyles) -> Line<'static> {
-    let look = if text.starts_with("@@") {
-        style.hunk
-    } else if text.starts_with('+') {
-        style.added
-    } else if text.starts_with('-') {
-        style.removed
-    } else {
-        Style::new()
-    };
-    Line::from(Span::styled(format!("    {text}"), look))
-}
-
 /// The lines of `git diff` worth showing: from the first hunk on, without the file header
-/// that the file row above already says.
+/// that the file list already says.
 pub fn hunks(diff: &str) -> Vec<String> {
     diff.lines().skip_while(|l| !l.starts_with("@@")).map(|l| l.replace('\t', "    ")).collect()
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Kind {
+    Added,
+    Removed,
+    Context,
+    Hunk,
+    /// git's "\ No newline at end of file", or a note in place of a diff ("binary").
+    Note,
+}
+
+/// Each diff line with the number it has in its file: the old file's for a removed line, the
+/// new one's otherwise. An untracked file's lines come without a hunk header, from line 1.
+fn annotate(lines: &[String]) -> Vec<(Kind, Option<u64>, &str)> {
+    let (mut old, mut new) = (1, 1);
+    let mut out = Vec::new();
+    for line in lines {
+        let (kind, number) = if line.starts_with("@@") {
+            // "@@ -12,5 +12,7 @@ fn name": where each side's hunk starts.
+            let start = |sign: char| line.split(' ').find_map(|f| f.strip_prefix(sign)?.split(',').next()?.parse::<u64>().ok());
+            old = start('-').unwrap_or(old);
+            new = start('+').unwrap_or(new);
+            (Kind::Hunk, None)
+        } else if line.starts_with('+') {
+            new += 1;
+            (Kind::Added, Some(new - 1))
+        } else if line.starts_with('-') {
+            old += 1;
+            (Kind::Removed, Some(old - 1))
+        } else if line.starts_with(' ') {
+            old += 1;
+            new += 1;
+            (Kind::Context, Some(new - 1))
+        } else {
+            (Kind::Note, None)
+        };
+        out.push((kind, number, line.as_str()));
+    }
+    out
+}
+
+/// Screen rows for the diff, `width` wide: a line-number column, then the line with its +/-
+/// marker, wrapped. Added and removed rows are coloured across the whole width, as in
+/// delta. Each comes with its row style.
+fn render(lines: &[(Kind, Option<u64>, &str)], width: usize, style: &GitStyles) -> Vec<(Line<'static>, Style)> {
+    // Room for the number column: four digits and a space.
+    let text_w = width.saturating_sub(6).max(1);
+    let mut rows = Vec::new();
+    for &(kind, number, text) in lines {
+        let look = match kind {
+            Kind::Added => style.added,
+            Kind::Removed => style.removed,
+            Kind::Hunk => style.hunk,
+            Kind::Context | Kind::Note => Style::new(),
+        };
+        if kind == Kind::Hunk {
+            rows.push((Line::from(Span::raw(text.to_owned())), look));
+            continue;
+        }
+        let (marker, body) = match kind {
+            Kind::Note => ("", text),
+            _ => text.split_at(1),
+        };
+        let chars: Vec<char> = body.chars().collect();
+        // ponytail: wraps by char count, so a line of wide (CJK) characters overruns.
+        let chunks: Vec<String> = if chars.is_empty() { vec![String::new()] } else { chars.chunks(text_w).map(|c| c.iter().collect()).collect() };
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            let num = match (i, number) {
+                (0, Some(n)) => format!("{n:>4} "),
+                _ => "     ".to_owned(),
+            };
+            rows.push((Line::from(vec![Span::styled(num, style.line_number), Span::raw(format!("{marker}{chunk}"))]), look));
+        }
+    }
+    rows
 }
 
 #[cfg(test)]
@@ -283,5 +351,15 @@ mod tests {
     fn hunks_drop_the_file_header() {
         let diff = "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n";
         assert_eq!(hunks(diff), ["@@ -1 +1 @@", "-old", "+new"]);
+    }
+
+    #[test]
+    fn diff_lines_are_numbered_by_their_side() {
+        let lines: Vec<String> = ["@@ -196,3 +196,3 @@ fn x", " keep", "-was", "+now", " after", "\\ No newline at end of file"].map(String::from).into();
+        let got: Vec<(Kind, Option<u64>)> = annotate(&lines).into_iter().map(|(k, n, _)| (k, n)).collect();
+        assert_eq!(
+            got,
+            [(Kind::Hunk, None), (Kind::Context, Some(196)), (Kind::Removed, Some(197)), (Kind::Added, Some(197)), (Kind::Context, Some(198)), (Kind::Note, None)]
+        );
     }
 }

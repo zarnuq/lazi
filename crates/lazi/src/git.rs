@@ -205,7 +205,8 @@ impl Git {
                     let Some(view) = self.view.as_mut().filter(|v| v.repo == path) else { continue };
                     match result {
                         Ok((changes, last)) => {
-                            for change in view.set_changes(changes, last) {
+                            view.set_changes(changes, last);
+                            if let Some(change) = view.wanted() {
                                 let _ = self.jobs.send(Job::Diff(path.clone(), change));
                             }
                         }
@@ -315,12 +316,14 @@ impl Git {
         let Some(view) = &mut self.view else { return Ok(Outcome::Continue) };
         let repo = view.repo.clone();
         match view.key(&action) {
-            Step::Nothing => {}
+            Step::Nothing => {
+                // The cursor may have moved onto a file whose diff isn't read yet.
+                if let Some(change) = view.wanted() {
+                    let _ = self.jobs.send(Job::Diff(repo, change));
+                }
+            }
             Step::Reload => {
                 let _ = self.jobs.send(Job::Changes(repo));
-            }
-            Step::Diff(change) => {
-                let _ = self.jobs.send(Job::Diff(repo, change));
             }
             Step::Exec(args) => {
                 let _ = self.jobs.send(Job::Exec(repo, args));
