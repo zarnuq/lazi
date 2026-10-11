@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::fs::MetadataExt;
 use std::time::SystemTime;
@@ -52,6 +53,25 @@ impl Listing {
     pub fn position(&self, name: &OsStr) -> Option<usize> {
         self.entries.iter().position(|e| e.name == name)
     }
+}
+
+/// The apparent size of everything under `dir`, not following symlinks or crossing into other
+/// filesystems (like `du -sx --apparent-size`), so /proc and network mounts don't count.
+/// A hard-linked file counts once (cargo's target directory is full of them). Anything unreadable
+/// counts as nothing.
+pub fn du(dir: &Path) -> u64 {
+    fn walk(dir: &Path, dev: u64, linked: &mut HashSet<u64>) -> u64 {
+        let Ok(read) = fs::read_dir(dir) else { return 0 };
+        read.flatten()
+            .map(|entry| match entry.metadata() {
+                Ok(meta) if meta.is_dir() => if meta.dev() == dev { walk(&entry.path(), dev, linked) } else { 0 },
+                Ok(meta) if meta.nlink() > 1 && !linked.insert(meta.ino()) => 0,
+                Ok(meta) => meta.len(),
+                Err(_) => 0,
+            })
+            .sum()
+    }
+    fs::metadata(dir).map_or(0, |meta| walk(dir, meta.dev(), &mut HashSet::new()))
 }
 
 /// Smart-case substring match: case-sensitive only if the query has an uppercase letter.

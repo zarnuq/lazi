@@ -60,7 +60,15 @@ pub fn run(
 
     if cmd.block {
         suspend(term)?;
+        // The tty is back in cooked mode, so Ctrl+c signals lazi as well as the command. Catch
+        // it rather than ignore it: a caught signal reverts to the default at exec, so the
+        // command can still be interrupted while lazi carries on.
+        extern "C" fn interrupted(_: libc::c_int) {}
+        // SAFETY: the handler does nothing, so it is async-signal-safe.
+        let old = unsafe { libc::signal(libc::SIGINT, interrupted as *const () as libc::sighandler_t) };
         let status = command.status();
+        // SAFETY: restores the disposition saved above.
+        unsafe { libc::signal(libc::SIGINT, old) };
         resume(term)?;
         return Ok(match status {
             Ok(s) if s.success() => None,

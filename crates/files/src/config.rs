@@ -227,6 +227,9 @@ pub enum Action {
     Back,
     Forward,
     ToggleHidden,
+    /// Show sizes in the current directory, directories measured in the background, without
+    /// sorting by them.
+    ToggleSizes,
     /// Name, size, mtime, extension, and round again.
     CycleSort,
     ReverseSort,

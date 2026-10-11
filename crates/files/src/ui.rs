@@ -40,7 +40,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         draw_side(buf, parent_col, app, parent, listing, cursor);
     }
     if let Some(listing) = app.listing(&app.cwd) {
-        let list = List { entries: app.entries(), error: listing.error.as_deref(), cursor: Some(app.cursor), offset: app.offset };
+        let list = List { entries: app.entries(), error: listing.error.as_deref(), cursor: Some(app.cursor), offset: app.offset, sizes: app.show_sizes };
         draw_list(buf, cwd_col, app, &app.cwd, list, app.find_matcher().as_ref());
     }
     if let Some(dir) = app.preview_dir()
@@ -238,6 +238,8 @@ struct List<'a> {
     error: Option<&'a str>,
     cursor: Option<usize>,
     offset: usize,
+    /// Show each file's size at the right edge.
+    sizes: bool,
 }
 
 /// Draws a column with no scroll state of its own, scrolled just enough to show `cursor`.
@@ -247,7 +249,7 @@ fn draw_side(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, listing: &List
     let offset = cursor
         .map_or(0, |c| (c + so + 1).saturating_sub(height))
         .min(listing.entries.len().saturating_sub(height));
-    let list = List { entries: &listing.entries, error: listing.error.as_deref(), cursor, offset };
+    let list = List { entries: &listing.entries, error: listing.error.as_deref(), cursor, offset, sizes: false };
     draw_list(buf, area, app, dir, list, None);
 }
 
@@ -299,6 +301,21 @@ fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, fi
             let used = (icon.width as usize + 1).min(width);
             x += used as u16;
             width -= used;
+        }
+        // Stat only the visible rows, at draw time, so the listing and its sort stay untouched.
+        // Directories show what the background measuring has found, an ellipsis until then.
+        if list.sizes
+            && let Some(size) = if entry.is_dir {
+                app.dir_sizes.get(&dir.join(&entry.name)).map(|size| size.map_or("…".to_owned(), human))
+            } else {
+                std::fs::metadata(dir.join(&entry.name)).ok().map(|meta| human(meta.len()))
+            }
+        {
+            let len = size.chars().count();
+            if len < width {
+                width -= len + 1;
+                buf.set_stringn(x + width as u16 + 1, y, &size, len, style);
+            }
         }
         buf.set_stringn(x, y, entry.name.to_string_lossy(), width, style);
         if let Some(mark) = app.mark(dir, entry)

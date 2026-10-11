@@ -34,6 +34,8 @@ pub enum Msg {
     /// A detached program failed.
     Failed(String),
     Preview(Request, Preview),
+    /// A directory's recursive size, for `show_sizes`.
+    Sized(PathBuf, u64),
 }
 
 /// Sends to the main loop and wakes it, since it may be asleep in `wake::wait`.
@@ -126,6 +128,10 @@ pub struct App {
     pub tasks: BTreeMap<u64, Progress>,
     next_task: u64,
     show_hidden: bool,
+    /// Draw file sizes beside the names in the current directory.
+    pub show_sizes: bool,
+    /// Recursive sizes of directories measured for `show_sizes`, None while still measuring.
+    pub dir_sizes: HashMap<PathBuf, Option<u64>>,
     sort: Sort,
     cache: HashMap<PathBuf, Listing>,
     loading: HashSet<PathBuf>,
@@ -168,6 +174,8 @@ impl App {
             tasks: BTreeMap::new(),
             next_task: 0,
             show_hidden: config::get().show_hidden,
+            show_sizes: false,
+            dir_sizes: HashMap::new(),
             sort: config::get().sort,
             cache: HashMap::new(),
             loading: HashSet::new(),
@@ -394,6 +402,13 @@ impl App {
 
     pub fn toggle_hidden(&mut self) {
         self.show_hidden = !self.show_hidden;
+        self.refresh();
+    }
+
+    /// Turning sizes on measures directories afresh, since they may have changed since last time.
+    pub fn toggle_sizes(&mut self) {
+        self.show_sizes = !self.show_sizes;
+        self.dir_sizes.clear();
         self.refresh();
     }
 
@@ -768,6 +783,9 @@ impl App {
                     self.refresh();
                 }
                 Msg::Failed(msg) => self.error = Some(msg),
+                Msg::Sized(dir, size) => {
+                    self.dir_sizes.insert(dir, Some(size));
+                }
                 Msg::Preview(req, preview) => {
                     // A fuller version of the preview already showing (the rest of highlighted code).
                     if let Some((current, old)) = &mut self.preview
@@ -909,9 +927,38 @@ impl App {
             watcher.set(&visible);
         }
         self.request_preview();
+        self.measure_dirs();
         if self.cache.len() > CACHE_MAX {
             self.cache.retain(|dir, _| visible.contains(dir));
         }
+    }
+
+    /// Measures the cwd's directories not measured yet, one after another on a thread, each size
+    /// arriving as it's done.
+    fn measure_dirs(&mut self) {
+        let Some(listing) = self.cache.get(&self.cwd).filter(|_| self.show_sizes) else { return };
+        let dirs: Vec<PathBuf> = listing
+            .entries
+            .iter()
+            .filter(|e| e.is_dir)
+            .map(|e| self.cwd.join(&e.name))
+            .filter(|path| !self.dir_sizes.contains_key(path))
+            .collect();
+        if dirs.is_empty() {
+            return;
+        }
+        for dir in &dirs {
+            self.dir_sizes.insert(dir.clone(), None);
+        }
+        let notify = self.notify.clone();
+        // ponytail: not cancelled on leaving the directory, so a huge tree keeps a thread busy
+        // until done; add a generation counter to stop it if that matters.
+        thread::spawn(move || {
+            for dir in dirs {
+                let size = crate::fs::du(&dir);
+                notify.send(Msg::Sized(dir, size));
+            }
+        });
     }
 
     fn ensure(&mut self, dir: &Path) {

@@ -229,6 +229,7 @@ The file browser's, from the example `files.ron`:
 | `f` | Filter the listing |
 | `Esc` | Clear the selection, else the filter, else the find highlight |
 | `z` | Jump with fzf |
+| `U` | Toggle sizes beside the names, directories included |
 | `cc` `cd` `cf` `cn` | Copy path / directory / file name / name without extension |
 | `J` `K` | Scroll the preview, or turn a PDF's pages |
 | `^z` | Suspend |

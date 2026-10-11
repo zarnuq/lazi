@@ -310,6 +310,8 @@
             // Run is a `sh -c` snippet with the targets as "$@". `block: true` hands it the
             // terminal; `reveal: true` does too, then goes to the path it prints.
             "z": Run(run: "fzf", reveal: true),
+            // Sizes beside the names here (directories measured in the background), without sorting by them.
+            "U": ToggleSizes,
             // CopyPath takes Path, Dir, Name or Stem (the name without its extension).
             "cc": CopyPath(Path),
             "cd": CopyPath(Dir),
