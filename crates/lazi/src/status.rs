@@ -19,6 +19,10 @@ pub struct Status {
     pub renamed: bool,
     pub deleted: bool,
     pub unmerged: bool,
+    /// When HEAD was committed and when the branch was last pushed, as Unix times. Not in
+    /// `git status`'s output: the worker asks `git log` for them after parsing.
+    pub committed: Option<i64>,
+    pub pushed: Option<i64>,
 }
 
 impl Status {
@@ -63,6 +67,33 @@ pub fn parse(text: &str) -> Status {
         s.branch = oid.chars().take(7).collect();
     }
     s
+}
+
+/// How long before `now` the Unix time `then` was, in one short unit: "now", "5m", "3h",
+/// "2d", "3w", "4mo", "2y". A time in the future (a skewed clock) reads as "now".
+pub fn age(now: i64, then: i64) -> String {
+    const MIN: i64 = 60;
+    const HOUR: i64 = 60 * MIN;
+    const DAY: i64 = 24 * HOUR;
+    const WEEK: i64 = 7 * DAY;
+    // The average Gregorian month and year, so a long span doesn't drift.
+    const MONTH: i64 = 2_629_746;
+    const YEAR: i64 = 31_556_952;
+    match (now - then).max(0) {
+        s if s < MIN => "now".to_owned(),
+        s if s < HOUR => format!("{}m", s / MIN),
+        s if s < DAY => format!("{}h", s / HOUR),
+        s if s < WEEK => format!("{}d", s / DAY),
+        s if s < MONTH => format!("{}w", s / WEEK),
+        s if s < YEAR => format!("{}mo", s / MONTH),
+        s => format!("{}y", s / YEAR),
+    }
+}
+
+/// The time in a reflog selector printed with `--date=unix`: `origin/main@{1793216048}`.
+pub fn reflog_time(selector: &str) -> Option<i64> {
+    let (_, rest) = selector.trim().rsplit_once("@{")?;
+    rest.strip_suffix('}')?.parse().ok()
 }
 
 /// zhimmer's rules for one XY pair (its lib/prompt.zsh), with v2's `.` where v1 has a space.
@@ -199,6 +230,27 @@ pub fn changes(text: &str) -> Vec<Change> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn age_picks_the_largest_whole_unit() {
+        let now = 1_800_000_000;
+        assert_eq!(age(now, now - 30), "now");
+        assert_eq!(age(now, now + 500), "now");
+        assert_eq!(age(now, now - 5 * 60), "5m");
+        assert_eq!(age(now, now - 3 * 3600 - 59), "3h");
+        assert_eq!(age(now, now - 2 * 86400), "2d");
+        assert_eq!(age(now, now - 15 * 86400), "2w");
+        assert_eq!(age(now, now - 70 * 86400), "2mo");
+        assert_eq!(age(now, now - 800 * 86400), "2y");
+    }
+
+    #[test]
+    fn reflog_time_reads_the_selector() {
+        assert_eq!(reflog_time("origin/main@{1793216048}\n"), Some(1793216048));
+        assert_eq!(reflog_time("origin/feat@{x}@{12}"), Some(12));
+        assert_eq!(reflog_time(""), None);
+        assert_eq!(reflog_time("origin/main@{now}"), None);
+    }
 
     #[test]
     fn changes_split_into_sections_by_xy() {

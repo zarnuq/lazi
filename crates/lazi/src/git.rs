@@ -382,6 +382,15 @@ impl Git {
             .unwrap_or(0)
             .min(40);
         let branch_w = self.repos.values().filter_map(|r| r.status.as_ref()?.as_ref().ok()).map(|s| s.branch.chars().count()).max().unwrap_or(0).min(24);
+        // The symbols column, so the ages after it line up.
+        let symbols_w = self
+            .repos
+            .values()
+            .filter_map(|r| r.status.as_ref()?.as_ref().ok())
+            .map(|s| symbols(s, &self.spec.symbols, &self.spec.style).iter().map(Span::width).sum::<usize>())
+            .max()
+            .unwrap_or(0);
+        let now = now();
 
         let mut rows: Vec<Line> = Vec::new();
         let mut cursor_row = None;
@@ -404,7 +413,7 @@ impl Git {
                 if index == self.cursor {
                     cursor_row = Some(rows.len());
                 }
-                rows.push(self.row(path, &name, indent(&folder), name_w, branch_w));
+                rows.push(self.row(path, &name, indent(&folder), [name_w, branch_w, symbols_w], now));
                 group = folder;
                 index += 1;
             }
@@ -471,8 +480,10 @@ impl Git {
         frame.buffer_mut().set_stringn(area.x, area.bottom() - 1, text, area.width as usize, line_style);
     }
 
-    /// One repo's row: name, branch, symbols, and fetch state.
-    fn row(&self, path: &Path, name: &str, indent: usize, name_w: usize, branch_w: usize) -> Line<'static> {
+    /// One repo's row: name, branch, symbols, how long ago it was committed to and pushed, and
+    /// fetch state. `widths` are the name, branch and symbols columns.
+    fn row(&self, path: &Path, name: &str, indent: usize, widths: [usize; 3], now: i64) -> Line<'static> {
+        let [name_w, branch_w, symbols_w] = widths;
         let style = &self.spec.style;
         // Cut to the column, like the branch below, so the columns stay in line.
         let width = name_w.saturating_sub(indent);
@@ -488,7 +499,18 @@ impl Git {
                 // Cut to the column so a long branch name doesn't push the symbols out of line.
                 let cut: String = s.branch.chars().take(branch_w).collect();
                 spans.push(Span::styled(format!("{cut:<branch_w$}  "), branch));
-                spans.extend(symbols(s, &self.spec.symbols, style));
+                let marks = symbols(s, &self.spec.symbols, style);
+                let pad = symbols_w.saturating_sub(marks.iter().map(Span::width).sum());
+                spans.extend(marks);
+                // "2h ⇡3d": committed two hours ago, pushed three days ago. The push half is
+                // missing when there's no upstream or it was never pushed from here.
+                let mut ages = s.committed.map(|t| format!("{:>3}", status::age(now, t))).unwrap_or_default();
+                if let Some(t) = s.pushed {
+                    ages.push_str(&format!(" {}{}", self.spec.symbols.ahead, status::age(now, t)));
+                }
+                if !ages.is_empty() {
+                    spans.push(Span::styled(format!("{:pad$}  {ages}", ""), style.age));
+                }
             }
         }
         if repo.is_some_and(|r| r.fetching) {
@@ -629,7 +651,18 @@ fn worker(jobs: Receiver<Job>, notify: Notifier) {
         match job {
             Job::Status(repos) => {
                 for path in repos {
-                    let result = git(&path, &["status", "--porcelain=v2", "--branch"], STATUS_LIMIT).map(|out| status::parse(&out));
+                    let result = git(&path, &["status", "--porcelain=v2", "--branch"], STATUS_LIMIT).map(|out| {
+                        let mut s = status::parse(&out);
+                        s.committed = git(&path, &["log", "-1", "--format=%ct"], STATUS_LIMIT).ok().and_then(|t| t.trim().parse().ok());
+                        // git keeps no record of a push but the upstream's reflog, where `git
+                        // push` logs "update by push" (a fetch logs something else). Only asked
+                        // when there is an upstream, which is the only time it can answer.
+                        if s.ahead_behind.is_some() {
+                            let args = ["log", "-g", "-1", "--grep-reflog=update by push", "--date=unix", "--format=%gd", "@{upstream}"];
+                            s.pushed = git(&path, &args, STATUS_LIMIT).ok().and_then(|t| status::reflog_time(&t));
+                        }
+                        s
+                    });
                     if !notify.send(Msg::Status(path, result)) {
                         return;
                     }
@@ -788,6 +821,12 @@ pub fn expand(root: &str) -> PathBuf {
         return PathBuf::from(home).join(rest.trim_start_matches('/'));
     }
     PathBuf::from(root)
+}
+
+/// The Unix time now.
+fn now() -> i64 {
+    // SAFETY: time accepts a null pointer and only returns the time.
+    unsafe { libc::time(std::ptr::null_mut()) }
 }
 
 /// The local time as HH:MM.

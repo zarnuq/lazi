@@ -56,6 +56,7 @@
                 arrows: (fg: "#fab387"),
                 clean: (fg: "#a6e3a1"),
                 error: (fg: "#f38ba8"),
+                age: (fg: "#6c7086"),
                 // A background, not reversed: reversing turns every coloured span into a block.
                 cursor: (bg: "#45475a"),
                 // The status view's diff: whole rows coloured for added and removed lines, as in

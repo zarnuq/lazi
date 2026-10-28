@@ -211,6 +211,9 @@ pub struct GitStyles {
     pub clean: Style,
     #[serde(deserialize_with = "files::style")]
     pub error: Style,
+    /// How long ago a repo was committed to and pushed.
+    #[serde(deserialize_with = "files::style")]
+    pub age: Style,
     #[serde(deserialize_with = "files::style")]
     pub cursor: Style,
     /// Diff lines in the status view.
