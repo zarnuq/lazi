@@ -19,10 +19,6 @@ pub struct Status {
     pub renamed: bool,
     pub deleted: bool,
     pub unmerged: bool,
-    /// When HEAD was committed and when the branch was last pushed, as Unix times. Not in
-    /// `git status`'s output: the worker asks `git log` for them after parsing.
-    pub committed: Option<i64>,
-    pub pushed: Option<i64>,
 }
 
 impl Status {

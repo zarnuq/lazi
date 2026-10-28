@@ -44,6 +44,8 @@ enum Job {
 /// What comes back from the worker, the fetch threads, the ticker and detached commands.
 enum Msg {
     Status(PathBuf, Result<Status, String>),
+    /// When HEAD was committed and the branch last pushed, as Unix times.
+    Times(PathBuf, Option<i64>, Option<i64>),
     Fetched(PathBuf, Result<(), String>),
     /// A detached `Run` failed.
     Failed(PathBuf, String),
@@ -87,6 +89,11 @@ struct Repo {
     fetch_error: Option<String>,
     /// A command's failure, shown until the next key.
     run_error: Option<String>,
+    /// When HEAD was committed and the branch last pushed, as Unix times. Kept apart from
+    /// `status` and filled after it, so a status refresh shows at once and keeps the last
+    /// ages on screen until the new ones land.
+    committed: Option<i64>,
+    pushed: Option<i64>,
 }
 
 pub struct Git {
@@ -182,6 +189,12 @@ impl Git {
                 Msg::Status(path, result) => {
                     if let Some(repo) = self.repos.get_mut(&path) {
                         repo.status = Some(result);
+                    }
+                }
+                Msg::Times(path, committed, pushed) => {
+                    if let Some(repo) = self.repos.get_mut(&path) {
+                        repo.committed = committed;
+                        repo.pushed = pushed;
                     }
                 }
                 Msg::Fetched(path, result) => {
@@ -506,8 +519,9 @@ impl Git {
                 // missing when there's no upstream or it was never pushed from here.
                 // Left-aligned in a column as wide as the longest age ("12mo"), like the
                 // columns before it, so the push ages start in line too.
-                let mut ages = format!("{:<4}", s.committed.map(|t| status::age(now, t)).unwrap_or_default());
-                if let Some(t) = s.pushed {
+                let repo = repo.expect("a status implies a repo");
+                let mut ages = format!("{:<4}", repo.committed.map(|t| status::age(now, t)).unwrap_or_default());
+                if let Some(t) = repo.pushed {
                     ages.push_str(&format!(" {}{}", self.spec.symbols.ahead, status::age(now, t)));
                 }
                 let ages = ages.trim_end().to_owned();
@@ -653,23 +667,27 @@ fn worker(jobs: Receiver<Job>, notify: Notifier) {
     for job in jobs {
         match job {
             Job::Status(repos) => {
+                // Every status first, then the ages on a thread of their own: they're two more
+                // git runs per repo, and waiting on them held each row's status back, so a
+                // full round showed rows filling in one at a time.
+                let mut later = Vec::with_capacity(repos.len());
                 for path in repos {
-                    let result = git(&path, &["status", "--porcelain=v2", "--branch"], STATUS_LIMIT).map(|out| {
-                        let mut s = status::parse(&out);
-                        s.committed = git(&path, &["log", "-1", "--format=%ct"], STATUS_LIMIT).ok().and_then(|t| t.trim().parse().ok());
-                        // git keeps no record of a push but the upstream's reflog, where `git
-                        // push` logs "update by push" (a fetch logs something else). Only asked
-                        // when there is an upstream, which is the only time it can answer.
-                        if s.ahead_behind.is_some() {
-                            let args = ["log", "-g", "-1", "--grep-reflog=update by push", "--date=unix", "--format=%gd", "@{upstream}"];
-                            s.pushed = git(&path, &args, STATUS_LIMIT).ok().and_then(|t| status::reflog_time(&t));
-                        }
-                        s
-                    });
-                    if !notify.send(Msg::Status(path, result)) {
+                    let result = git(&path, &["status", "--porcelain=v2", "--branch"], STATUS_LIMIT).map(|out| status::parse(&out));
+                    let upstream = result.as_ref().is_ok_and(|s| s.ahead_behind.is_some());
+                    if !notify.send(Msg::Status(path.clone(), result)) {
                         return;
                     }
+                    later.push((path, upstream));
                 }
+                let notify = notify.clone();
+                thread::spawn(move || {
+                    for (path, upstream) in later {
+                        let (committed, pushed) = times(&path, upstream);
+                        if !notify.send(Msg::Times(path, committed, pushed)) {
+                            return;
+                        }
+                    }
+                });
             }
             Job::Changes(repo) => {
                 if !notify.send(Msg::Changes(repo.clone(), changes(&repo))) {
@@ -702,6 +720,20 @@ fn worker(jobs: Receiver<Job>, notify: Notifier) {
             }
         }
     }
+}
+
+/// When HEAD was committed and when the branch was last pushed, as Unix times. git keeps no
+/// record of a push but the upstream's reflog, where `git push` logs "update by push" (a fetch
+/// logs something else), so the push is only asked for when there is an upstream.
+fn times(repo: &Path, upstream: bool) -> (Option<i64>, Option<i64>) {
+    let committed = git(repo, &["log", "-1", "--format=%ct"], STATUS_LIMIT).ok().and_then(|t| t.trim().parse().ok());
+    let pushed = upstream
+        .then(|| {
+            let args = ["log", "-g", "-1", "--grep-reflog=update by push", "--date=unix", "--format=%gd", "@{upstream}"];
+            git(repo, &args, STATUS_LIMIT).ok().and_then(|t| status::reflog_time(&t))
+        })
+        .flatten();
+    (committed, pushed)
 }
 
 /// The status view's files, every untracked one listed rather than its folder, and the last
