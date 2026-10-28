@@ -504,10 +504,13 @@ impl Git {
                 spans.extend(marks);
                 // "2h ⇡3d": committed two hours ago, pushed three days ago. The push half is
                 // missing when there's no upstream or it was never pushed from here.
-                let mut ages = s.committed.map(|t| format!("{:>3}", status::age(now, t))).unwrap_or_default();
+                // Left-aligned in a column as wide as the longest age ("12mo"), like the
+                // columns before it, so the push ages start in line too.
+                let mut ages = format!("{:<4}", s.committed.map(|t| status::age(now, t)).unwrap_or_default());
                 if let Some(t) = s.pushed {
                     ages.push_str(&format!(" {}{}", self.spec.symbols.ahead, status::age(now, t)));
                 }
+                let ages = ages.trim_end().to_owned();
                 if !ages.is_empty() {
                     spans.push(Span::styled(format!("{:pad$}  {ages}", ""), style.age));
                 }
