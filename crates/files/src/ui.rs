@@ -139,21 +139,22 @@ fn draw_status(buf: &mut Buffer, area: Rect, app: &App) -> Option<(u16, u16)> {
         // One stat per frame, and frames only follow events.
         let path = app.cwd.join(&entry.name);
         if let Ok(meta) = fs::metadata(&path).or_else(|_| fs::symlink_metadata(&path)) {
-            buf.set_stringn(area.x, area.y, details(entry, &meta), width, config::get().style.dim);
+            buf.set_stringn(area.x, area.y, details(&path, entry, &meta), width, config::get().style.dim);
         }
     }
 
     None
 }
 
-/// Permissions, size (files only) and mtime, like `ls -l`.
-fn details(entry: &Entry, meta: &Metadata) -> String {
+/// Permissions, size (files only), mtime and a link's target, like `ls -l`.
+fn details(path: &Path, entry: &Entry, meta: &Metadata) -> String {
     let kind = if entry.is_link { 'l' } else if entry.is_dir { 'd' } else { '-' };
     let perms: String = (0..9).rev().map(|bit| if meta.mode() >> bit & 1 == 1 { b"xwr"[bit % 3] as char } else { '-' }).collect();
     let size = if entry.is_dir { String::new() } else { format!("{}  ", human(meta.size())) };
     let tm = ops::local_time(meta.mtime());
     let (year, month, day, hour, min) = (tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
-    format!("{kind}{perms}  {size}{year:04}-{month:02}-{day:02} {hour:02}:{min:02}")
+    let target = if entry.is_link { fs::read_link(path).map_or(String::new(), |t| format!("  -> {}", t.display())) } else { String::new() };
+    format!("{kind}{perms}  {size}{year:04}-{month:02}-{day:02} {hour:02}:{min:02}{target}")
 }
 
 /// Bytes in powers of 1024, one decimal past the first unit.
@@ -263,10 +264,11 @@ fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, fi
     }
     let rows = list.entries.iter().enumerate().skip(list.offset).take(area.height as usize);
     for (y, (i, entry)) in (area.y..).zip(rows) {
-        let base = if entry.is_dir {
-            styles.dir
-        } else if entry.is_link {
+        // Links first, so a link to a directory doesn't pass for one.
+        let base = if entry.is_link {
             styles.link
+        } else if entry.is_dir {
+            styles.dir
         } else {
             let ext = Path::new(&entry.name).extension().and_then(OsStr::to_str).map(str::to_ascii_lowercase);
             ext.and_then(|ext| styles.files.iter().find(|f| f.ext.contains(&ext))).map_or(Style::new(), |f| f.style)
