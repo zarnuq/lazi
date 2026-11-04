@@ -99,8 +99,8 @@ pub enum SortBy {
     Ext,
 }
 
-/// Glyphs drawn before names, e.g. from a Nerd Font. A directory gets its entry in `dirs`, else
-/// `dir`; a file its entry in `files`, else in `exts`, else `link` or `file`.
+/// Glyphs drawn before names, e.g. from a Nerd Font. A symlink gets `link`; a directory its entry
+/// in `dirs`, else `dir`; a file its entry in `files`, else in `exts`, else `file`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Icons {

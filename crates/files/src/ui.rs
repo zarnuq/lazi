@@ -40,7 +40,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         draw_side(buf, parent_col, app, parent, listing, cursor);
     }
     if let Some(listing) = app.listing(&app.cwd) {
-        let list = List { entries: app.entries(), error: listing.error.as_deref(), cursor: Some(app.cursor), offset: app.offset, sizes: app.show_sizes };
+        let list = List { entries: app.entries(), error: listing.error.as_deref(), cursor: Some(app.cursor), offset: app.offset, sizes: app.show_sizes, targets: true };
         draw_list(buf, cwd_col, app, &app.cwd, list, app.find_matcher().as_ref());
     }
     if let Some(dir) = app.preview_dir()
@@ -191,6 +191,10 @@ fn draw_menu(buf: &mut Buffer, area: Rect, menu: &Menu) {
 
 fn icon<'a>(icons: &'a Icons, entry: &Entry) -> &'a Icon {
     let name = entry.name.to_str().unwrap_or_default();
+    // Before anything else: a link's colour alone is too easy to miss.
+    if entry.is_link {
+        return &icons.link;
+    }
     if entry.is_dir {
         return icons.dirs.get(name).unwrap_or(&icons.dir);
     }
@@ -199,7 +203,7 @@ fn icon<'a>(icons: &'a Icons, entry: &Entry) -> &'a Icon {
         .files
         .get(name)
         .or_else(|| icons.exts.get(&ext()?))
-        .unwrap_or(if entry.is_link { &icons.link } else { &icons.file })
+        .unwrap_or(&icons.file)
 }
 
 /// The end of `text` if it's wider than `width`, since errors put the cause last.
@@ -241,6 +245,8 @@ struct List<'a> {
     offset: usize,
     /// Show each file's size at the right edge.
     sizes: bool,
+    /// Show where each symlink points after its name.
+    targets: bool,
 }
 
 /// Draws a column with no scroll state of its own, scrolled just enough to show `cursor`.
@@ -250,7 +256,7 @@ fn draw_side(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, listing: &List
     let offset = cursor
         .map_or(0, |c| (c + so + 1).saturating_sub(height))
         .min(listing.entries.len().saturating_sub(height));
-    let list = List { entries: &listing.entries, error: listing.error.as_deref(), cursor, offset, sizes: false };
+    let list = List { entries: &listing.entries, error: listing.error.as_deref(), cursor, offset, sizes: false, targets: false };
     draw_list(buf, area, app, dir, list, None);
 }
 
@@ -319,7 +325,15 @@ fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, fi
                 buf.set_stringn(x + width as u16 + 1, y, &size, len, style);
             }
         }
-        buf.set_stringn(x, y, entry.name.to_string_lossy(), width, style);
+        let (end, _) = buf.set_stringn(x, y, entry.name.to_string_lossy(), width, style);
+        // Like the sizes, read only for visible rows at draw time.
+        if list.targets
+            && entry.is_link
+            && let Ok(target) = std::fs::read_link(dir.join(&entry.name))
+        {
+            let left = width.saturating_sub((end - x) as usize);
+            buf.set_stringn(end, y, format!(" -> {}", target.display()), left, style.patch(styles.dim));
+        }
         if let Some(mark) = app.mark(dir, entry)
             && let Some(cell) = buf.cell_mut((area.x, y))
         {

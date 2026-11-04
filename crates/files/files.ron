@@ -60,8 +60,8 @@
 
     // Glyphs before each name, from a Nerd Font. Each gets one cell plus a space after it;
     // kitty draws an icon followed by a space across both cells. An icon is "glyph", or ("glyph", "colour") with a colour as in `style`; without
-    // one it takes the name's colour. A directory gets its entry in `dirs`, else `dir`; a file
-    // its entry in `files` (exact names), else in `exts` (lowercase), else `link` or `file`.
+    // one it takes the name's colour. A symlink gets `link`; a directory its entry in `dirs`, else
+    // `dir`; a file its entry in `files` (exact names), else in `exts` (lowercase), else `file`.
     // `icons: None` draws names alone. Nerd Fonts' icon sets are drawn at different sizes:
     // directories use yazi's glyphs, which are larger, and files Material Design's, which share
     // one size.
