@@ -160,6 +160,22 @@
         },
     ),
 
+    // Git status signs at the right of the current directory's rows, like yazi's git plugin.
+    // Each is "sign" or ("sign", "colour"), as an icon. A directory shows the most pressing state
+    // beneath it (untracked, then unstaged, staged, added, deleted, updated); ignored files don't
+    // count. Inside an ignored or untracked directory everything takes its sign. `git: None` runs
+    // no git.
+    git: (
+        ignored: ("!", "darkgray"),
+        untracked: ("?", "magenta"),
+        unstaged: ("M", "yellow"),
+        staged: ("M", "green"),
+        added: ("A", "green"),
+        deleted: ("D", "red"),
+        // Unmerged.
+        updated: ("U", "yellow"),
+    ),
+
     // Programs to open files with, named for `rules` below. `run` is a `sh -c` snippet with the
     // files as "$@" ("$1" is the first). `block: true` hands it the terminal and waits; otherwise
     // it runs detached, and its error shows if it fails.

@@ -4,6 +4,7 @@
 mod app;
 mod config;
 mod fs;
+mod git;
 mod input;
 mod kitty;
 mod open;
@@ -335,7 +336,10 @@ fn run_cmd(term: &mut DefaultTerminal, app: &mut App, cmd: &Cmd) -> io::Result<(
     }
     let on_fail = app.on_fail();
     app.error = open::run(term, cmd, &app.cwd, on_fail)?;
-    // A blocking program (an editor, a shell) may have changed what's on disk.
+    // A blocking program (an editor, a shell) may have changed what's on disk, editing files in
+    // place where inotify on the directories doesn't see it.
+    app.git.rescan();
+    app.git_status();
     app.refresh();
     Ok(())
 }

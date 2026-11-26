@@ -37,6 +37,8 @@ pub struct Config {
     pub style: Styles,
     /// None draws names alone.
     pub icons: Option<Icons>,
+    /// Signs after names in the current directory for their git status. None runs no git.
+    pub git: Option<GitSigns>,
     pub openers: HashMap<String, Opener>,
     pub rules: Vec<Rule>,
     pub keys: Keys,
@@ -145,6 +147,21 @@ impl TryFrom<IconSpec> for Icon {
         let width = Span::raw(&glyph).width() as u16;
         Ok(Self { glyph, width, fg })
     }
+}
+
+/// One sign per git state, in yazi's names; a directory shows the most pressing one beneath it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitSigns {
+    pub ignored: Icon,
+    pub untracked: Icon,
+    /// Changed since staged, or never staged.
+    pub unstaged: Icon,
+    pub staged: Icon,
+    pub added: Icon,
+    pub deleted: Icon,
+    /// Unmerged.
+    pub updated: Icon,
 }
 
 #[derive(Clone, Deserialize)]

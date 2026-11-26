@@ -103,6 +103,7 @@ box, and lazi's own keys. `files.ron` covers the file browser:
 - styles for every coloured element;
 - icons (Nerd Font glyphs, optionally coloured) by directory name, file name or extension,
   or none at all;
+- git status signs and their colours, or no git at all;
 - named openers (shell snippets, blocking or detached);
 - ordered rules matching directories, extensions or text files to a chain of previewers and
   a list of openers;
@@ -138,6 +139,8 @@ what's missing when you use it:
 - Bookmarked directories (`gh` `gc` `gd`) and an fzf jump.
 - Hidden-file toggle. Listings sort directories first, then names ignoring case.
 - Optional file icons, picked by name or extension, never by reading the file.
+- Git status signs beside names in a repository, like yazi's git plugin; folders show what's
+  changed inside them.
 - The cursor stays 5 rows from the edge when scrolling.
 
 **Previews**

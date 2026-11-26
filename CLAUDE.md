@@ -48,7 +48,9 @@ The file browser lives in `crates/files/src/`:
   detached (detached stderr goes to a memfd, read back on failure), fzf capture, clipboard.
 - `kitty.rs` — kitty graphics protocol; tracks what the terminal holds so frames only send
   escapes on change.
-- `watch.rs` — inotify on the parent, cwd and previewed directory.
+- `git.rs` — git status signs: one `git status` of the cwd's repo on a worker, rerun on
+  inotify changes (the visible directories and `.git`) and after blocking programs.
+- `watch.rs` — inotify on the parent, cwd, previewed directory and the repo's `.git`.
 - `wake.rs` — `poll(2)` over the tty, an eventfd poked by workers, inotify and a SIGWINCH
   pipe.
 - `ui.rs` — drawing: header, three columns, status line/prompts, opener menu.

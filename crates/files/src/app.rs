@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::{self, Opener, Part, Sort, SortBy};
 use crate::fs::{Entry, Listing, Matcher};
+use crate::git;
 use crate::input::Input;
 use crate::kitty::{self, Kitty};
 use crate::open;
@@ -36,6 +37,8 @@ pub enum Msg {
     Preview(Request, Preview),
     /// A directory's recursive size, for `show_sizes`.
     Sized(PathBuf, u64),
+    /// A repository's `git status`, None if it failed.
+    Git(PathBuf, Option<git::Status>),
 }
 
 /// Sends to the main loop and wakes it, since it may be asleep in `wake::wait`.
@@ -132,6 +135,8 @@ pub struct App {
     pub show_sizes: bool,
     /// Recursive sizes of directories measured for `show_sizes`, None while still measuring.
     pub dir_sizes: HashMap<PathBuf, Option<u64>>,
+    /// The cwd's repository, for the git signs.
+    pub git: git::Tracker,
     sort: Sort,
     cache: HashMap<PathBuf, Listing>,
     loading: HashSet<PathBuf>,
@@ -176,6 +181,7 @@ impl App {
             show_hidden: config::get().show_hidden,
             show_sizes: false,
             dir_sizes: HashMap::new(),
+            git: git::Tracker::default(),
             sort: config::get().sort,
             cache: HashMap::new(),
             loading: HashSet::new(),
@@ -316,6 +322,9 @@ impl App {
         if changed.is_empty() {
             return false;
         }
+        // A file appearing or going, or git itself at work in `.git`.
+        self.git.rescan();
+        self.git_status();
         self.refresh();
         true
     }
@@ -786,6 +795,11 @@ impl App {
                 Msg::Sized(dir, size) => {
                     self.dir_sizes.insert(dir, Some(size));
                 }
+                Msg::Git(root, status) => {
+                    if self.git.finish(&root, status) {
+                        self.git_status();
+                    }
+                }
                 Msg::Preview(req, preview) => {
                     // A fuller version of the preview already showing (the rest of highlighted code).
                     if let Some((current, old)) = &mut self.preview
@@ -923,8 +937,13 @@ impl App {
         for dir in &visible {
             self.ensure(dir);
         }
+        if self.git.follow(&self.cwd) {
+            self.git_status();
+        }
         if let Some(watcher) = &mut self.watcher {
-            watcher.set(&visible);
+            // `.git` too, where staging, commits and checkouts show.
+            let git_dir = self.git.git_dir();
+            watcher.set(&[&visible[..], git_dir.as_slice()].concat());
         }
         self.request_preview();
         self.measure_dirs();
@@ -958,6 +977,16 @@ impl App {
                 let size = crate::fs::du(&dir);
                 notify.send(Msg::Sized(dir, size));
             }
+        });
+    }
+
+    /// Runs `git status` in the cwd's repository on a thread, or again after the one running.
+    pub fn git_status(&mut self) {
+        let Some(root) = self.git.start() else { return };
+        let notify = self.notify.clone();
+        thread::spawn(move || {
+            let status = git::status(&root);
+            notify.send(Msg::Git(root, status));
         });
     }
 

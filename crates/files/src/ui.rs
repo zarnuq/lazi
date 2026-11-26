@@ -13,6 +13,7 @@ use ratatui::widgets::{Block, Clear, Paragraph, Widget, Wrap};
 use crate::app::{App, Mark, Menu, Prompt};
 use crate::config::{self, Icon, Icons};
 use crate::fs::{Entry, Listing, Matcher};
+use crate::git::State;
 use crate::input::Input;
 use crate::ops;
 use crate::preview::Preview;
@@ -40,7 +41,15 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App) {
         draw_side(buf, parent_col, app, parent, listing, cursor);
     }
     if let Some(listing) = app.listing(&app.cwd) {
-        let list = List { entries: app.entries(), error: listing.error.as_deref(), cursor: Some(app.cursor), offset: app.offset, sizes: app.show_sizes, targets: true };
+        let list = List {
+            entries: app.entries(),
+            error: listing.error.as_deref(),
+            cursor: Some(app.cursor),
+            offset: app.offset,
+            sizes: app.show_sizes,
+            targets: true,
+            git: true,
+        };
         draw_list(buf, cwd_col, app, &app.cwd, list, app.find_matcher().as_ref());
     }
     if let Some(dir) = app.preview_dir()
@@ -206,6 +215,19 @@ fn icon<'a>(icons: &'a Icons, entry: &Entry) -> &'a Icon {
         .unwrap_or(&icons.file)
 }
 
+fn git_sign(app: &App, path: &Path) -> Option<&'static Icon> {
+    let signs = config::get().git.as_ref()?;
+    Some(match app.git.state(path)? {
+        State::Ignored => &signs.ignored,
+        State::Updated => &signs.updated,
+        State::Deleted => &signs.deleted,
+        State::Added => &signs.added,
+        State::Staged => &signs.staged,
+        State::Unstaged => &signs.unstaged,
+        State::Untracked => &signs.untracked,
+    })
+}
+
 /// The end of `text` if it's wider than `width`, since errors put the cause last.
 fn tail(text: &str, width: usize) -> String {
     let len = text.chars().count();
@@ -247,6 +269,8 @@ struct List<'a> {
     sizes: bool,
     /// Show where each symlink points after its name.
     targets: bool,
+    /// Show each entry's git sign at the right edge.
+    git: bool,
 }
 
 /// Draws a column with no scroll state of its own, scrolled just enough to show `cursor`.
@@ -256,7 +280,7 @@ fn draw_side(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, listing: &List
     let offset = cursor
         .map_or(0, |c| (c + so + 1).saturating_sub(height))
         .min(listing.entries.len().saturating_sub(height));
-    let list = List { entries: &listing.entries, error: listing.error.as_deref(), cursor, offset, sizes: false, targets: false };
+    let list = List { entries: &listing.entries, error: listing.error.as_deref(), cursor, offset, sizes: false, targets: false, git: false };
     draw_list(buf, area, app, dir, list, None);
 }
 
@@ -309,6 +333,15 @@ fn draw_list(buf: &mut Buffer, area: Rect, app: &App, dir: &Path, list: List, fi
             let used = (icon.width as usize + 1).min(width);
             x += used as u16;
             width -= used;
+        }
+        // Rightmost, sizes left of it. Plain on the cursor row, like the icons.
+        if list.git
+            && let Some(sign) = git_sign(app, &dir.join(&entry.name))
+            && (sign.width as usize) < width
+        {
+            width -= sign.width as usize + 1;
+            let sign_style = if on_cursor { style } else { sign.fg.map_or(style, |fg| style.fg(fg)) };
+            buf.set_stringn(x + width as u16 + 1, y, &sign.glyph, sign.width as usize, sign_style);
         }
         // Stat only the visible rows, at draw time, so the listing and its sort stay untouched.
         // Directories show what the background measuring has found, an ellipsis until then.
